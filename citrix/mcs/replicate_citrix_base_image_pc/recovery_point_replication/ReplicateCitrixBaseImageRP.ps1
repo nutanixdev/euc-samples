@@ -551,7 +551,7 @@ function GetPrismv3Task {
     )
 
     $Method = "GET"
-    $RequestUri = "https://$($pc_source):9440/api/nutanix/v3/tasks/$($TaskId)"
+    $RequestUri = "https://$($Cluster):9440/api/nutanix/v3/tasks/$($TaskId)"
     $Payload = $null
     try {
         $TaskStatus = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $Credential -ErrorAction Stop
