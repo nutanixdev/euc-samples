@@ -1,0 +1,18 @@
+[
+    {
+        "Catalog": "Catalog1",
+        "Controller": "Controller1"
+    },
+    {
+        "Catalog": "Catalog2",
+        "Controller": "Controller1"
+    },
+    {
+        "Catalog": "Catalog3",
+        "Controller": "Controller2"
+    },
+    {
+        "Catalog": "Catalog4",
+        "Controller": "Controller2"
+    }
+]
