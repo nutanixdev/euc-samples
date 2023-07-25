@@ -222,7 +222,7 @@ $params = @{
 The direct script invocation via the command line with define arguments would be:
 
 ```
-.\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value MCS -Mode Add -VM_Pattern_Match "*MCS" -UseCustomCredentialFile
+.\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value PVS -Mode Add -VM_Pattern_Match "*PVS" -UseCustomCredentialFile
 ```
 
 The script will:
