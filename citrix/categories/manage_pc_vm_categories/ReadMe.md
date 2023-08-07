@@ -58,7 +58,7 @@ $params = @{
 & UpdatePCVMCategories.ps1 $params
 ```
 
-The direct script invocation via the command line with define arguments would be:
+The direct script invocation via the command line with defined arguments would be:
 
 ```
 .\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value MCS -Mode Add -IncludeList "Server1","Server2","Server3" -UseCustomCredentialFile -Whatif
@@ -91,7 +91,7 @@ $params = @{
 & UpdatePCVMCategories.ps1 $params
 ```
 
-The direct script invocation via the command line with define arguments would be:
+The direct script invocation via the command line with defined arguments would be:
 
 ```
 .\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value MCS -Mode Add -VM_Pattern_Match "*MCS" -ExclusionList "Server1","Server2" -UseCustomCredentialFile -Whatif
@@ -124,7 +124,7 @@ $params = @{
 & UpdatePCVMCategories.ps1 $params
 ```
 
-The direct script invocation via the command line with define arguments would be:
+The direct script invocation via the command line with defined arguments would be:
 
 ```
 .\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value MCS -Mode Add -VM_Pattern_Match "*MCS" -UseCustomCredentialFile -async
@@ -156,7 +156,7 @@ $params = @{
 & UpdatePCVMCategories.ps1 $params
 ```
 
-The direct script invocation via the command line with define arguments would be:
+The direct script invocation via the command line with defined arguments would be:
 
 ```
 .\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value MCS -Mode Add -IncludeList "Server1","Server2","Server3" -UseCustomCredentialFile
@@ -188,7 +188,7 @@ $params = @{
 & UpdatePCVMCategories.ps1 $params
 ```
 
-The direct script invocation via the command line with define arguments would be:
+The direct script invocation via the command line with defined arguments would be:
 
 ```
 .\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value MCS -Mode Add -VM_Pattern_Match "*MCS" -UseCustomCredentialFile
@@ -219,7 +219,7 @@ $params = @{
 & UpdatePCVMCategories.ps1 $params
 ```
 
-The direct script invocation via the command line with define arguments would be:
+The direct script invocation via the command line with defined arguments would be:
 
 ```
 .\UpdatePCVMCategories.ps1 -pc_source 1.1.1.1 -Category Citrix_Provisioning_Type -Value PVS -Mode Add -VM_Pattern_Match "*PVS" -UseCustomCredentialFile
