@@ -129,6 +129,8 @@
     # This script is provided as-is to outline capability and methodology for achieving the defined goals.
     # James Kindon - Senior Solutions Architect, EUC - Nutanix
     # 30.05.2023: Initial release
+    # 21.08.2023: Updated loop logic in Prism API Status call to exit on failure rather than break
+    # 21.08.2023: Fixed PS5 vs PS7 count outputs where $CompletionMessageofOOBReplication.count and $RemoteSites.count reports a $null in PS5
     #--------------------------------------------------------------------------------------------------------#
 #>
 
@@ -1216,12 +1218,12 @@ if ($TriggerPDReplication.IsPresent) {
     }
     
     $CompletionMessageofOOBReplication = $CompletionMessageofOOBReplication.entities | Where-Object {$_.message -like $MessageMatchString} | Sort-Object created_time_stamp_in_usecs -Descending | Where-Object {$_.context_values[2] -eq $SnapID -and $_.context_values[1] -in $ProtectionDomain.entities.remote_site_names}
-
-    if ($CompletionMessageofOOBReplication.Count -eq $RemoteSites.count) {
-        Write-Log -Message "[PD Replication] Cluster replication complete. Found replication finished events for $($CompletionMessageofOOBReplication.Count) out of $($RemoteSites.count) remote Clusters" -Level Info
+    # PS 5 vs PS Core will handle count differently, PS Core would be ok with $CompletionMessageofOOBReplication.count and $RemoteSites.count, however PS 5 reports this as $null. Updates to use $CompletionMessageofOOBReplication.Id.Count and $TotalRemoteClusterCount respectively
+    if ($CompletionMessageofOOBReplication.Id.Count -eq $TotalRemoteClusterCount) {
+        Write-Log -Message "[PD Replication] Cluster replication complete. Found replication finished events for $($CompletionMessageofOOBReplication.Id.Count) out of $($TotalRemoteClusterCount) remote Clusters" -Level Info
     }
     else {
-        while ($CompletionMessageofOOBReplication.Count -ne $RemoteSites.count) {
+        while ($CompletionMessageofOOBReplication.Id.Count -ne $TotalRemoteClusterCount) {
             if ($ReplicationSuccessQueryAttempts -eq $MaxReplicationSuccessQueryAttempts) {
                 Write-Log -Message "[PD Replication] Max Replication Query for Success ($($MaxReplicationSuccessQueryAttempts)) has been reached. Assuming failed replication on the source Cluster: $($SourceCluster)" -Level Warn
                 StopIteration
@@ -1249,12 +1251,12 @@ if ($TriggerPDReplication.IsPresent) {
                 
                 $CompletionMessageofOOBReplication = $CompletionMessageofOOBReplication.entities | Where-Object {$_.message -like $MessageMatchString} | Sort-Object created_time_stamp_in_usecs -Descending | Where-Object {$_.context_values[2] -eq $SnapID -and $_.context_values[1] -in $ProtectionDomain.entities.remote_site_names}
                 
-                Write-Log -Message "[PD Replication] Found replication finished events for $($CompletionMessageofOOBReplication.Count) out of $($RemoteSites.count). Checking again in $($EventCheckInterval) seconds." -Level Info
+                Write-Log -Message "[PD Replication] Found replication finished events for $($CompletionMessageofOOBReplication.Id.Count) out of $($TotalRemoteClusterCount). Checking again in $($EventCheckInterval) seconds." -Level Info
                 $ReplicationSuccessQueryAttempts += 1
                 Start-Sleep $EventCheckInterval
             }
         }
-        Write-Log -Message "[PD Replication] Cluster replication complete. Found replication finished events for $($CompletionMessageofOOBReplication.Count) clusters" -Level Info
+        Write-Log -Message "[PD Replication] Cluster replication complete. Found replication finished events for $($CompletionMessageofOOBReplication.Id.Count) clusters" -Level Info
     }
 }
 #endregion Protection Domain Replication
