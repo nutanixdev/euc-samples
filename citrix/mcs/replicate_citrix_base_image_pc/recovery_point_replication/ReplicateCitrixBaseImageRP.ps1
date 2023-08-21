@@ -524,7 +524,14 @@ function GetPrismv2Task {
         $TaskStatus = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $Credential -ErrorAction Stop
         Write-Log -Message "$($Phase) Monitoring task: $($TaskId)"
         while ($TaskStatus.progress_status -ne "SUCCEEDED") {
-            Write-Log -Message "$($Phase) Task Status is: $($TaskStatus.progress_status). Waiting for Task completion. Status: $($TaskStatus.percentage_complete)% complete" -Level Info
+            if ($TaskStatus.progress_status -ne "FAILED") {
+                Write-Log -Message "$($Phase) Task Status is: $($TaskStatus.progress_status). Waiting for Task completion. Status: $($TaskStatus.percentage_complete)% complete" -Level Info
+            }
+            elseif ($TaskStatus.progress_status -eq "FAILED"){
+                Write-Log -Message "$($Phase) Task Status is: FAILED" -level Warn
+                StopIteration
+                Exit 1
+            }
             Start-Sleep $SleepTime
             $TaskStatus = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $Credential -ErrorAction Stop
         }
@@ -534,7 +541,8 @@ function GetPrismv2Task {
     }
     catch {
         Write-Log -Message "$($Phase) Failed to get task status for task ID: $($TaskId)" -Level Warn
-        Break
+        StopIteration
+        Exit 1
     }     
 }
 
@@ -560,7 +568,8 @@ function GetPrismv3Task {
             if ($TaskStatus.Status -eq "FAILED") {
                 Write-Log -Message "$($Phase) Task Status is: $($TaskStatus.Status)" -Level Warn
                 Write-Log -Message "$($TaskStatus.error_detail)" -Level Warn
-                Break
+                StopIteration
+                Exit 1
             }
             Write-Log -Message "$($Phase) Task Status is: $($TaskStatus.Status). Waiting for Task Completion. Status: $($TaskStatus.percentage_complete)% complete" -Level Info
             Start-Sleep $SleepTime
@@ -572,7 +581,8 @@ function GetPrismv3Task {
     }
     catch {
         Write-Log -Message "$($Phase) Failed to get task status for task ID: $($TaskId)" -Level Warn
-        Break
+        StopIteration
+        Exit 1
     }     
 }
 

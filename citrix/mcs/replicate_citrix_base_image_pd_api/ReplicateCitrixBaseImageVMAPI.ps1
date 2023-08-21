@@ -729,10 +729,13 @@ function GetPrismv2Task {
         Write-Log -Message "$($Phase) Monitoring task: $($TaskId)"
         while ($TaskStatus.progress_status -ne "SUCCEEDED") {
             if ($TaskStatus.progress_status -ne "FAILED") {
-                Write-Log -Message "$($Phase) Task Status is: $($TaskStatus.progress_status)" -level Warn
-                Break
+                Write-Log -Message "$($Phase) Task Status is: $($TaskStatus.progress_status). Waiting for Task completion. Status: $($TaskStatus.percentage_complete)% complete" -Level Info
             }
-            Write-Log -Message "$($Phase) Task Status is: $($TaskStatus.progress_status). Waiting for Task completion. Status: $($TaskStatus.percentage_complete)% complete" -Level Info
+            elseif ($TaskStatus.progress_status -eq "FAILED") {
+                Write-Log -Message "$($Phase) Task Status is: FAILED" -level Warn
+                StopIteration
+                Exit 1
+            }
             Start-Sleep $SleepTime
             $TaskStatus = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $Credential -ErrorAction Stop
         }
@@ -742,7 +745,8 @@ function GetPrismv2Task {
     }
     catch {
         Write-Log -Message "$($Phase) Failed to get task status for task ID: $($TaskId)" -Level Warn
-        Break
+        StopIteration
+        Exit 1
     }     
 }
 
