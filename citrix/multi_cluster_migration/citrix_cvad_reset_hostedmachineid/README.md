@@ -40,27 +40,27 @@ The following parameters exist to drive the behaviour of the script:
 
 #### Mandatory and recommended parameters:
 
-- **`AdminAddress`**: Mandatory**`String`**. The Citrix Controller to target.
-- **`TargetMachineScope`**: Mandatory **`String`**. The method used to target machine scoping. Can be either: `MachineList`,`CSV` or `NutanixPD`. See `TargetMachineList`, `TargetMachineCSVList` and `NutanixPD` parameters for detail.
-- **`TargetNutanixCluster`**: Mandatory **`String`**. The target Nutanix cluster hosting the machines to target.
-- **`TargetHostingConnectionName`**: Mandatory **`String`**. The name of the Hosting Connection to target workload changes to in CVAD. The Hosting Connection pointing to the target Nutanix Cluster.
-- **`ResetTargetHostingConnection`**: Optional **`Switch`**. Reset the Target Hosting Connection if any machine objects are altered. This removes the sync delay between CVAD and the Nutanix Hosting platform and allows power status to be retrieved.
+- `AdminAddress`: Mandatory**`String`**. The Citrix Controller to target.
+- `TargetMachineScope`: Mandatory **`String`**. The method used to target machine scoping. Can be either: `MachineList`,`CSV` or `NutanixPD`. See `TargetMachineList`, `TargetMachineCSVList` and `NutanixPD` parameters for detail.
+- `TargetNutanixCluster`: Mandatory **`String`**. The target Nutanix cluster hosting the machines to target.
+- `TargetHostingConnectionName`: Mandatory **`String`**. The name of the Hosting Connection to target workload changes to in CVAD. The Hosting Connection pointing to the target Nutanix Cluster.
+- `ResetTargetHostingConnection`: Optional **`Switch`**. Reset the Target Hosting Connection if any machine objects are altered. This removes the sync delay between CVAD and the Nutanix Hosting platform and allows power status to be retrieved.
 
 #### Optional Parameters
 
-- **`LogPath`**: Optional **`String`**. Log path output for all operations. The default is `C:\Logs\UpdateCVADHostedMachineId.log`
-- **`LogRollover`**: Optional **`Int`**.Number of days before log files are rolled over. Default is 5/
-- **`UseCustomCredentialFile`**: Optional. **`switch`**. Will call the `Get-CustomCredentials` function which keeps outputs and inputs a secure credential file base on Stephane Bourdeaud from Nutanix functions.
-- **`CredPath`**: Optional **`String`**. Used if using the `UseCustomCredentialFile` parameter. Defines the location of the credential file. The default is `"$Env:USERPROFILE\Documents\WindowsPowerShell\CustomCredentials"`.
-- **`Whatif`**: Optional. **`Switch`**. Will action the script in a whatif processing mode only.
-- **`MaxCVADVMCount`**: Optional **`Integer`**. The max number of CVAD VMs to query. Default is 1000.
-- **`TargetMachineList`**: Optional **`Array`**. An array of Nutanix machines to target. Use the name of the VM in Nutanix. Used with the `TargetMachineScope` parameter when set to `MachineList`.
-- **`TargetMachineCSVList`**: Optional **`String`**. A CSV list of Nutanix machines to target. CSV file must use the `Name` Header. Used with the `TargetMachineScope` parameter when set to `CSV`.
-- **`NutanixPD`**: Optional **`String`**. The Nutanix Protection Domain to target machine scoping. Used with the TargetMachineScope parameter when set to NutanixPD.
-- **`ExclusionList`**: Optional **`Array`**. A list of machines to exclude from processing. Used regardless of the the `TargetmachineScope` parameter.
-- **`BypassHypervisorTypeCheck`**: Optional **`Switch`**. An advanced parameter to bypass hypervisor checks. The script supports, by default, only Nutanix Hosting Connection Types: `AcropolisPCFactory`, `AcropolisFactory`, `AcropolisXIFactory`.
-- **`SwitchCatalogZoneID`**: Optional **`Switch`**. An advanced parameter to allow the change of Catalog Zone ID to match the Target Hosting Connection. In some situations it may be preferable to have the Catalog in the same zone as the Hosting Connection. Must be used with the `CatalogNames` parameter.
-- **`CatalogNames`**: Optional **`Array`**. An array of Catalogs to switch Zone IDs. Used in conjunction with the `SwitchCatalogZoneID` Parameter.
+- `LogPath`: Optional **`String`**. Log path output for all operations. The default is `C:\Logs\UpdateCVADHostedMachineId.log`
+- `LogRollover`: Optional **`Int`**.Number of days before log files are rolled over. Default is 5/
+- `UseCustomCredentialFile`: Optional. **`switch`**. Will call the `Get-CustomCredentials` function which keeps outputs and inputs a secure credential file base on Stephane Bourdeaud from Nutanix functions.
+- `CredPath`: Optional **`String`**. Used if using the `UseCustomCredentialFile` parameter. Defines the location of the credential file. The default is `"$Env:USERPROFILE\Documents\WindowsPowerShell\CustomCredentials"`.
+- `Whatif`: Optional. **`Switch`**. Will action the script in a whatif processing mode only.
+- `MaxCVADVMCount`: Optional **`Integer`**. The max number of CVAD VMs to query. Default is 1000.
+- `TargetMachineList`: Optional **`Array`**. An array of Nutanix machines to target. Use the name of the VM in Nutanix. Used with the `TargetMachineScope` parameter when set to `MachineList`.
+- `TargetMachineCSVList`: Optional **`String`**. A CSV list of Nutanix machines to target. CSV file must use the `Name` Header. Used with the `TargetMachineScope` parameter when set to `CSV`.
+- `NutanixPD`: Optional **`String`**. The Nutanix Protection Domain to target machine scoping. Used with the TargetMachineScope parameter when set to NutanixPD.
+- `ExclusionList`: Optional **`Array`**. A list of machines to exclude from processing. Used regardless of the the `TargetmachineScope` parameter.
+- `BypassHypervisorTypeCheck`: Optional **`Switch`**. An advanced parameter to bypass hypervisor checks. The script supports, by default, only Nutanix Hosting Connection Types: `AcropolisPCFactory`, `AcropolisFactory`, `AcropolisXIFactory`.
+- `SwitchCatalogZoneID`: Optional **`Switch`**. An advanced parameter to allow the change of Catalog Zone ID to match the Target Hosting Connection. In some situations it may be preferable to have the Catalog in the same zone as the Hosting Connection. Must be used with the `CatalogNames` parameter.
+- `CatalogNames`: Optional **`Array`**. An array of Catalogs to switch Zone IDs. Used in conjunction with the `SwitchCatalogZoneID` Parameter.
 
 ## Scenarios
 
