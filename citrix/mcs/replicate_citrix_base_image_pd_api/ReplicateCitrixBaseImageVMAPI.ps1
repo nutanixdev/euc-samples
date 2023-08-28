@@ -1361,7 +1361,7 @@ if (!$ExcludeSourceClusterFromProcessing) {
     Write-Log -Message "[VM] Virtual Machine uuid is: $($vm_uuid) on the source Cluster: $($SourceCluster)" -level Info
     #endregion get local VM
     
-    #region Get Snaphots
+    #region Get Snapshots
     #------------------------------------------------------------
     # Get Start Count of Snapshots
     #------------------------------------------------------------
@@ -1383,10 +1383,10 @@ if (!$ExcludeSourceClusterFromProcessing) {
         Exit 1
     }
 
-    $SnaphotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
-    Write-Log -Message "[VM Snapshot] There are $($SnaphotCount) Snapshots matching: $($VMPrefix + $BaseVM) on the source Cluster: $($SourceCluster)" -Level Info
+    $SnapshotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
+    Write-Log -Message "[VM Snapshot] There are $($SnapshotCount) Snapshots matching: $($VMPrefix + $BaseVM) on the source Cluster: $($SourceCluster)" -Level Info
     #Write-Log -Message "[VM Snapshot] There are $(($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).count) Snapshots matching: $($VMPrefix + $BaseVM) on the source Cluster: $($SourceCluster)" -Level Info
-    #endregion Get Snaphots
+    #endregion Get Snapshots
     
     #region Take Snapshot
     #------------------------------------------------------------
@@ -1449,11 +1449,11 @@ if (!$ExcludeSourceClusterFromProcessing) {
         Exit 1
     }
 
-    $SnaphotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
-    Write-Log -Message "[VM Snapshot] There are now: $($SnaphotCount) Snapshots matching $($VMPrefix + $BaseVM) on the source cluster $($SourceCluster)" -Level Info
+    $SnapshotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
+    Write-Log -Message "[VM Snapshot] There are now: $($SnapshotCount) Snapshots matching $($VMPrefix + $BaseVM) on the source cluster $($SourceCluster)" -Level Info
     #endregion Get Snapshots
     
-    #region Snaphot deletion
+    #region Snapshot deletion
     #------------------------------------------------------------
     # Handle the deletion of snapshot retention if set
     #------------------------------------------------------------
@@ -1516,7 +1516,7 @@ if (!$ExcludeSourceClusterFromProcessing) {
     else {
         Write-Log -Message "[VM Snapshot] Cleanup (ImageSnapsToRetain) not specified. Nothing to process." -Level Info
     }
-    #endregion Snaphot deletion
+    #endregion Snapshot deletion
 
     #------------------------------------------------------------
     # Update the processed cluster counts
@@ -1691,11 +1691,11 @@ foreach ($Site in $RemoteSiteIPS){
         Exit 1
     }
 
-    $SnaphotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
-    Write-Log -Message "[VM Snapshot] There are: $($SnaphotCount) Snapshots matching $($VMPrefix + $BaseVM) on the target cluster $($TargetCluster)" -Level Info
+    $SnapshotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
+    Write-Log -Message "[VM Snapshot] There are: $($SnapshotCount) Snapshots matching $($VMPrefix + $BaseVM) on the target cluster $($TargetCluster)" -Level Info
       
     #------------------------------------------------------------
-    # Take a snaphot
+    # Take a Snapshot
     #------------------------------------------------------------
     #----------------------------------------------------------------------------------------------------------------------------
     # Set API call detail
@@ -1787,8 +1787,8 @@ foreach ($Site in $RemoteSiteIPS){
         Exit 1
     }
     
-    $SnaphotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
-    Write-Log -Message "[VM Snapshot] There are now: $($SnaphotCount) Snapshots matching $($VMPrefix + $BaseVM) on the target cluster $($TargetCluster)" -Level Info
+    $SnapshotCount = ($snapshots.entities | Where-Object {$_.snapshot_name -like ($VMPrefix + "$BaseVM*")}).Count
+    Write-Log -Message "[VM Snapshot] There are now: $($SnapshotCount) Snapshots matching $($VMPrefix + $BaseVM) on the target cluster $($TargetCluster)" -Level Info
 
     #endregion VM Snapshot on target
 

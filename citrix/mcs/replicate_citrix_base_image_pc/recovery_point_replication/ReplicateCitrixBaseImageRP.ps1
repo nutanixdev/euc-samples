@@ -1462,7 +1462,7 @@ foreach ($_ in $Clusters) {
             $Snapshots = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismElementCredentials -ErrorAction Stop
         }
         catch {
-            Write-Log -Message "[Snaphots] Failed to get an up to date list of snapshots on the target cluster: $($ClusterName)" -Level Warn
+            Write-Log -Message "[Snapshots] Failed to get an up to date list of snapshots on the target cluster: $($ClusterName)" -Level Warn
             $TotalErrorCount += 1
             Continue
         }

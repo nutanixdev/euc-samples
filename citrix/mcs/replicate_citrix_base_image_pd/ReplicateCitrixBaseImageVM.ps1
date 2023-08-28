@@ -1260,7 +1260,7 @@ foreach ($Site in $RemoteSiteIPS){
 
     #region VM Snapshot on target
     #------------------------------------------------------------
-    # Take a snaphot
+    # Take a Snapshot
     #------------------------------------------------------------
     $vm = Get-NTNXVM -SearchString ($VMPrefix + $BaseVM) -Server $TargetCluster
     if (!$vm) {
