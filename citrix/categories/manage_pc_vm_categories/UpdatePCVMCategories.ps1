@@ -21,8 +21,6 @@
     Optional. A list of names to exclude from the captured VM list.
 .PARAMETER Mode
     Mandatory. What mode to operate in, either add or remove for the Category assignment.
-.PARAMETER VMCount
-    The number of virtual machine entities to retrieve from PC. Defaults to 1000.
 .PARAMETER SleepTime
     The amount of time to sleep between API task retrieval. Defaults to 5 seconds.
 .PARAMETER APICallVerboseLogging
@@ -64,6 +62,7 @@
     Author: James Kindon, Nutanix, 21.06.23. Most of the core logic via Stephane Bourdeaud at Nutanix
     10.07.23 - JK - Added ExclusionList capability
     17.07.23 - JK - Added IncludeList capability
+    18.09.23 - JK - Fixed VM iteration for PCs with over 500 VMs
 #>
 
 #region Params
@@ -107,9 +106,6 @@ Param(
 
     [Parameter(Mandatory = $false)]
     [int]$SleepTime = 5, # seconds to sleep between task retrieval
-
-    [Parameter(Mandatory = $false)]
-    [int]$VMCount = 1000, # number of VMS to retrieve from PC
 
     [Parameter(Mandatory = $false)]
     [switch]$APICallVerboseLogging, # Show the API calls being made
@@ -529,6 +525,39 @@ function GetPrismv3Task {
     }     
 }
 
+function GetPCVMIncrements {
+    param (
+        [parameter(mandatory = $true)]
+        [int]$offset
+    )
+    #----------------------------------------------------------------------------------------------------------------------------
+    # Set API call detail
+    #----------------------------------------------------------------------------------------------------------------------------
+    $Method = "POST"
+    $RequestUri = "https://$($pc_source):9440/api/nutanix/v3/vms/list"
+    $PayloadContent = @{
+        kind   = "vm"
+        length = 500
+        offset = $offset
+    }
+    $Payload = (ConvertTo-Json $PayloadContent)
+    #----------------------------------------------------------------------------------------------------------------------------
+    Write-Log -Message "[VM Retrieval] Retrieving machines from offset $($offset) under PC: $($pc_source)" -Level Info
+    try {
+        $vm_list = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
+        $vm_list = $vm_list.entities
+        Write-Log -Message "[VM Retrieval] Retrieved $($vm_list.Count) virtual machines from offset $($Offset) under PC: $($pc_source)" -Level Info
+        #Now we need to add them to the existing $VirtualMachinesArray
+        $Global:VirtualMachines = ($Global:VirtualMachines + $vm_list)
+        Write-Log -Message "[VM Retrieval] Retrieved VM Count is $($Global:VirtualMachines.Count) under PC: $($pc_source)" -Level Info
+    }
+    catch {
+        Write-Log -Message "[VM Retrieval] Failed to retrieve virtual machines from $($pc_source)" -Level Warn
+        StopIteration
+        Exit 1
+    }
+}
+
 #endregion
 
 #Region Execute
@@ -557,7 +586,6 @@ Write-Log -Message "[Script Params] Category Assignment Mode = $($Mode)" -Level 
 Write-Log -Message "[Script Params] VM IncludeList = $($IncludeList)" -Level Info
 Write-Log -Message "[Script Params] VM VM_Pattern_Match = $($VM_Pattern_Match)" -Level Info
 Write-Log -Message "[Script Params] VM ExclusionList = $($ExclusionList)" -Level Info
-Write-Log -Message "[Script Params] VM Retrievel Count = $($VMCount)" -Level Info
 
 #endregion script parameter reporting
 
@@ -665,7 +693,7 @@ try {
 }
 catch {
     $saved_error = $_.Exception.Message
-    if ($saved_error -like "*(404) Not Found*") {
+    if ($saved_error -like "*(404) Not Found*" -or $saved_error -like "*404 (NOT FOUND)*") {
         Write-Log -Message "[Category Retrieval] The category:value pair specified ($($category):$($value)) does not exist in Prism Central $($pc_source)" -Level Warn
         StopIteration
         Exit 1
@@ -689,8 +717,7 @@ $Method = "POST"
 $RequestUri = "https://$($pc_source):9440/api/nutanix/v3/vms/list"
 $PayloadContent = @{
     kind   = "vm"
-    length = $VMCount
-
+    length = 500
 }
 $Payload = (ConvertTo-Json $PayloadContent)
 #----------------------------------------------------------------------------------------------------------------------------
@@ -703,34 +730,78 @@ elseif ($IncludeList) {
 
 try {
     $VirtualMachines = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
-    if ($VM_Pattern_Match) {
-        $VirtualMachinesPatternMatch = $VirtualMachines.entities | Where-Object { $_.status.name -like "$VM_Pattern_Match*" }
-        $TargetCount = ($VirtualMachinesPatternMatch.status.name).count
-    }
-    elseif ($IncludeList) {
-        $VirtualMachinesIncludeMatch = $VirtualMachines.entities | Where-Object { $_.status.name -in $IncludeList }
-        $TargetCount = ($VirtualMachinesIncludeMatch.status.name).count
-    }
-
-
-    if ($TargetCount -gt 0) {
-        Write-Log -Message "[VM Retrieval] Sucessfully retrieved and matched $($TargetCount) machines from $($pc_source)"
-    }
-    else {
-        if ($VM_Pattern_Match) {
-            Write-Log -Message "[VM Retrieval] Failed to retrieve and match any machines using pattern match $($VM_Pattern_Match) from $($pc_source)" -Level Warn
-        }
-        elseif ($IncludeList) {
-            Write-Log -Message "[VM Retrieval] Failed to retrieve and match any machines using the specified IncludeList from $($pc_source)" -Level Warn
-        }
-        StopIteration
-        Exit 0
-    }
+    $vm_total_entity_count = $VirtualMachines.metadata.total_matches
+    Write-Log -Message "[VM Retrieval] Sucessfully retrieved virtual machines from $($pc_source)" -Level Info
 }
 catch {
     Write-Log -Message "[VM Retrieval] Failed to retrieve virtual machines from $($pc_source)" -Level Warn
     Break
 }
+
+$VirtualMachines = $VirtualMachines.entities
+
+if ($null -ne $VirtualMachines) {
+    Write-Log -Message "[VM Retrieval] Retrieved $($VirtualMachines.Count) virtual machines under PC: $($pc_source)" -Level Info
+}
+else {
+    Write-Log -Message "[VM Retrieval] Failed to retrieve virtual machine info from $($pc_source)" -Level Error
+    StopIteration
+    Exit 1
+}
+
+#region bulk machine retrieval from PC
+
+# Configuration Limit reached - bail
+if ($vm_total_entity_count -gt 25000) {
+    Write-Log -Message "[VM Retrieval] 25K VM limit reached. This is not a supported configuration. Exiting script." -Level Warn
+    StopIteration
+    Exit 1
+}
+
+$api_batch_increment = 500
+
+if ($vm_total_entity_count -gt 500) {
+    # Set the variable to Global for this run
+    $Global:VirtualMachines = $VirtualMachines
+    Write-Log -Message "[VM Retrieval] $($vm_total_entity_count) virtual machines exist under PC: $($pc_source). Looping through batch pulls" -Level Info
+    # iterate through increments of 500 until the offset reaches or exceeds the value of $vm_total_entity_count.
+    for ($offset = 500; $offset -lt $vm_total_entity_count; $offset += $api_batch_increment) {
+        $vm_offset = $offset
+        GetPCVMIncrements -offset $vm_offset
+    }
+}
+
+# Set the variable back to normal
+if ($vm_total_entity_count -gt 500) {
+    $VirtualMachines = $Global:VirtualMachines
+}
+#endregion bulk machine retrievale from PC
+
+#region Handle VM Pattern Match
+if ($VM_Pattern_Match) {
+    $VirtualMachinesPatternMatch = $VirtualMachines | Where-Object { $_.status.name -like "$VM_Pattern_Match*" }
+    $TargetCount = ($VirtualMachinesPatternMatch.status.name).count
+}
+elseif ($IncludeList) {
+    $VirtualMachinesIncludeMatch = $VirtualMachines | Where-Object { $_.status.name -in $IncludeList }
+    $TargetCount = ($VirtualMachinesIncludeMatch.status.name).count
+}
+
+
+if ($TargetCount -gt 0) {
+    Write-Log -Message "[VM Retrieval] Sucessfully retrieved and matched $($TargetCount) machines from $($pc_source)"
+}
+else {
+    if ($VM_Pattern_Match) {
+        Write-Log -Message "[VM Retrieval] Failed to retrieve and match any machines using pattern match $($VM_Pattern_Match) from $($pc_source)" -Level Warn
+    }
+    elseif ($IncludeList) {
+        Write-Log -Message "[VM Retrieval] Failed to retrieve and match any machines using the specified IncludeList from $($pc_source)" -Level Warn
+    }
+    StopIteration
+    Exit 0
+}
+#endregion Handle VM Pattern Match
 
 if ($VM_Pattern_Match) {
     $VirtualMachinesToProcess = $VirtualMachinesPatternMatch.status.name

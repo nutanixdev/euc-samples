@@ -30,7 +30,6 @@ The following parameters exist to drive the behaviour of the script:
 - **`ExclusionList`**: Optional **`array`**. A list of vm names to exclude from processing.
 - **`LogPath`**: Optional **`String`**. Log path output for all operations. The default is `C:\Logs\UpdatePCVMCategories.log`
 - **`LogRollover`**: Optional **`Int`**.Number of days before log files are rolled over. Default is 5
-- **`VMCount`**: Optional **`Int`**. The number of virtual machine entities to retrieve from PC. Defaults to 1000.
 - **`SleepTime`**: Optional **`Int`**. The amount of time to sleep between API task retrieval. Defaults to 5 seconds.
 - **`APICallVerboseLogging`**: Optional. **`switch`**. Switch to enable logging output for API calls.
 - **`UseCustomCredentialFile`**: Optional. **`switch`**. Will call the `Get-CustomCredentials` function which keeps outputs and inputs a secure credential file base on Stephane Bourdeaud from Nutanix functions.
