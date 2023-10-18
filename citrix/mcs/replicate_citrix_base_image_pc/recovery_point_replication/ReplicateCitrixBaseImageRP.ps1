@@ -73,6 +73,7 @@
     # This script is provided as-is to outline capability and methodology for achieving the defined goals.
     # James Kindon - Senior Solutions Architect, EUC - Nutanix
     # 13.06.2023: Initial release
+    # 18.10.2023: Updated to handle large recovery point sets
     #--------------------------------------------------------------------------------------------------------#
     ToDo
     - Test against multiple Availability Zone configurations?
@@ -766,6 +767,39 @@ function ValidateExclusiveCitrixProcessingCatalog {
     }
 }
 
+function GetPCRecoveryPointIncrements {
+    param (
+        [parameter(mandatory = $true)]
+        [int]$offset
+    )
+    #----------------------------------------------------------------------------------------------------------------------------
+    # Set API call detail
+    #----------------------------------------------------------------------------------------------------------------------------
+    $Method = "POST"
+    $RequestUri = "https://$($pc_source):9440/api/nutanix/v3/vm_recovery_points/list"
+    $PayloadContent = @{
+        kind   = "vm_recovery_point"
+        length = 500
+        offset = $offset
+    }
+    $Payload = (ConvertTo-Json $PayloadContent)
+    #----------------------------------------------------------------------------------------------------------------------------
+    Write-Log -Message "[Recovery Points] Retrieving for Recovery Points from offset $($offset) under PC: $($pc_source)" -Level Info
+    try {
+        $rp_list = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
+        $rp_list = $rp_list.entites
+        Write-Log -Message "[Recovery Points] Retrieved $($rp_list.Count) Recovery Points from offset $($Offset) under PC: $($pc_source)" -Level Info
+        #Now we need to add them to the existing $RecoveryPoints Array
+        $Global:RecoveryPoints = ($Global:RecoveryPoints + $rp_list)
+        Write-Log -Message "[Recovery Points] Retrieved Recovery Point Count is $($Global:RecoveryPoints.Count) under PC: $($pc_source)" -Level Info
+    }
+    catch {
+        Write-Log -Message "[Recovery Points] Failed to retrieve Recovery Points from $($pc_source)" -Level Warn
+        StopIteration
+        Exit 1
+    }
+}
+
 #endregion
 
 #region Variables
@@ -1108,7 +1142,6 @@ $RequestUri = "https://$($pc_source):9440/api/nutanix/v3/vms/list"
 $PayloadContent = @{
     kind = "vm"
     filter = "vm_name==$BaseVM"
-    length = 10000
 }
 $Payload = (ConvertTo-Json $PayloadContent)
 #----------------------------------------------------------------------------------------------------------------------------
@@ -1197,11 +1230,13 @@ $Method = "POST"
 $RequestUri = "https://$($pc_source):9440/api/nutanix/v3/vm_recovery_points/list"
 $PayloadContent = @{
     kind = "vm_recovery_point"
+    length = 500
 }
 $Payload = (ConvertTo-Json $PayloadContent)
 #----------------------------------------------------------------------------------------------------------------------------
 try {
     $RecoveryPoints = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
+    $rp_total_entity_count = $RecoveryPoints.metadata.total_matches
 }
 catch {
     Write-Log -Message "[Prism Central] Could not retrieve Recovery Points under the Prism Central Instance $($pc_source)" -level Warn
@@ -1210,8 +1245,36 @@ catch {
     Exit 1
 }
 
-Write-Log -Message "[Recovery Point] There are $($RecoveryPoints.entities.Count) Recovery Points under the Prism Central Instance $($pc_source)" -Level Info
-$Target_RecoveryPoints = $RecoveryPoints.entities | Where-Object {$_.status.resources.parent_vm_reference.uuid -eq $source_vm_uuid}
+$RecoveryPoints = $RecoveryPoints.entities
+
+#region bulk recovery point retrieval from PC
+if ($rp_total_entity_count -gt 25000) {
+    Write-Log -Message "[Recovery Point] 25K Recovery Point limit reached. This is not a supported configuration. Exiting script." -Level Warn
+    StopIteration
+    Exit 1
+}
+
+$api_batch_increment = 500
+
+if ($rp_total_entity_count -gt 500) {
+    # Set the variable to Global for this run
+    $Global:RecoveryPoints = $RecoveryPoints
+    Write-Log -Message "[Recovery Point] $($rp_total_entity_count) Recovery Points exist under PC: $($pc_source). Looping through batch pulls" -Level Info
+    # iterate through increments of 500 until the offset reaches or exceeds the value of $rp_total_entity_count.
+    for ($offset = 500; $offset -lt $rp_total_entity_count; $offset += $api_batch_increment) {
+        $rp_offset = $offset
+        GetPCRecoveryPointIncrements -offset $rp_offset
+    }
+}
+
+# Set the variable back to normal
+if ($rp_total_entity_count -gt 500) {
+    $RecoveryPoints = $Global:RecoveryPoints
+}
+#endregion bulk recovery point retrieval from PC
+
+Write-Log -Message "[Recovery Point] There are $($RecoveryPoints.Count) Recovery Points under the Prism Central Instance $($pc_source)" -Level Info
+$Target_RecoveryPoints = $RecoveryPoints | Where-Object {$_.status.resources.parent_vm_reference.uuid -eq $source_vm_uuid}
 if (!$Target_RecoveryPoints) {
     Write-Log -Message "[Recovery Point] There are no Recovery Points matching $($source_vm_name) with uuid: $($source_vm_uuid) under the Prism Central Instance $($pc_source)" -Level Warn
     StopIteration
