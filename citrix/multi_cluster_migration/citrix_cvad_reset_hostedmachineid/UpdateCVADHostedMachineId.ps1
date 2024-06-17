@@ -768,13 +768,14 @@ $ctx_machines_mcs = $ctx_machines | where-Object { $_.ProvisioningType -eq "MCS"
 $ctx_machines_pvs = $ctx_machines | where-Object { $_.ProvisioningType -eq "PVS" }
 $ctx_machines_not_power_managed = $ctx_machines | Where-Object { $_.HostedMachineId -eq $null }
 $target_ctx_machines = $ctx_machines | Where-Object { $_.ProvisioningType -ne "MCS" -and $_.ProvisioningType -ne "PVS" -and $_.HostedMachineId -ne $null }
+$target_ctx_machines_count = ($target_ctx_machines | Measure-Object).Count
 
 Write-Log -Message "[Citrix Machines] There are $($ctx_machines_mcs.count) MCS provisioned machines excluded from scope" -Level Info
 Write-Log -Message "[Citrix Machines] There are $($ctx_machines_pvs.count) PVS provisioned machines excluded from scope" -Level Info
 Write-Log -Message "[Citrix Machines] There are $($ctx_machines_not_power_managed.count) non power managed machines excluded from scope" -Level Info
 
-if ($target_ctx_machines.count -gt 0) {
-    Write-Log -Message "[Citrix Machines] There are $($target_ctx_machines.count) manually provisioned power managed machines included in scope" -Level Info
+if ($target_ctx_machines_count -gt 0) {
+    Write-Log -Message "[Citrix Machines] There are $($target_ctx_machines_count) manually provisioned power managed machines included in scope" -Level Info
 }
 else {
     Write-Log -Message "[Citrix Machines] There are no machines matching the appropriate requirements in the Citrix Site" -Level Warn
@@ -797,7 +798,7 @@ $Payload = $null # we are on a get run
 try {
     Write-Log -Message "[Nutanix Cluster] Connecting to the Cluster: $($TargetNutanixCluster)" -Level Info
     $Cluster = InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCredentials -ErrorAction Stop
-    Write-Log -Message "[Nutanix Cluster] Successfully connected to the Cluser: $($TargetNutanixCluster)" -Level Info
+    Write-Log -Message "[Nutanix Cluster] Successfully connected to the Cluster: $($TargetNutanixCluster)" -Level Info
 }
 catch {
     Write-Log -Message "[Nutanix Cluster] Could not connect to the Cluster: $($TargetNutanixCluster) " -Level Warn
@@ -875,6 +876,7 @@ if ($TargetMachineScope -eq "NutanixPD") {
     }
     # Get the machines from the supplied protection domain
     $target_ntx_machines = $ntx_machines | Where-Object { $_.name -in $ntx_pd.entities.vms.vm_name -and $_.name -notin $ExclusionList }
+    $target_ctx_machines_count = ($target_ctx_machines | Measure-Object).Count
 }
 elseif ($TargetMachineScope -eq "CSV") {
     Write-Log -Message "[Machine Scoping] Attempting to import CSV file $($TargetMachineCSVList)" -Level Info
@@ -919,7 +921,7 @@ $Count = 1
 $AlterationCount = 0
 
 foreach ($ntx_vm in $target_ntx_machines) {
-    Write-Log -Message "[Nutanix VM] Processing VM $($Count) of $($target_ntx_machines.count)" -Level Info
+    Write-Log -Message "[Nutanix VM] Processing VM $($Count) of $($target_ntx_machines_count)" -Level Info
     if ($ntx_vm.name -in $target_ctx_machines.HostedMachineName) {
         $CitrixHostedMachineId = ($target_ctx_machines | Where-Object { $_.HostedMachineName -match $ntx_vm.name }).HostedMachineId
         $CitrixHostingConnectionId = ($target_ctx_machines | Where-Object { $_.HostedMachineName -match $ntx_vm.name }).HypervisorConnectionUid
@@ -1000,7 +1002,7 @@ foreach ($ntx_vm in $target_ntx_machines) {
 # Reset the Citrix Hosting Connection to update power states (there is a 5-10 minute sync otherwise)
 #------------------------------------------------------------
 if ($ResetTargetHostingConnection) {
-    if ($target_ntx_machines.count -gt 0 -and $AlterationCount -gt 0) {
+    if ($target_ntx_machines_count -gt 0 -and $AlterationCount -gt 0) {
         if (!$Whatif) {
             #we are executing
             Write-Log -Message "[Citrix Hosting] Resetting Citrix Hosting Connection: $($TargetHostingConnectionName)" -Level Info
