@@ -26,6 +26,15 @@ Optionally, Citrix Catalogs should be updated with the created `snapshot`.
 - The script assumes that the user running the script, has appropriate rights in each Citrix site if Citrix Catalogs are processed.
 - The script has only been tested against a Prism Central Instance with a Single Availability zone.
 
+## A note on Availability Zones
+
+- The script will use the v3 API to identify Availability Zones. 
+- It is assumed that credentials work for all PCs and all PEs under those PCs.
+- If there are any issues with an associated Availability Zone or PC instance, the `ExcludedPrismCentrals` parameter can be used to exclude them. This is an array of IP addresses. Specify the IP of the Prism Central Instances you want to exclude.
+- If you want to override the list of Prism Central Instances as learned by the default queries, you can use the `AdditionalPrismCentrals` parameter. This is an array of IP addresses of Prism Central Instances. Do not include the `pc_source` IP in this list, it will be included by default.
+- The script has relatively strict validation logic and will halt on most errors. This is designed for consistency, however, you can override this behavior with `IgnoreRecoveryPointDistributionValidation` being set. Be warned that by using this switch, you may end up with inconsistent results across clusters. The script is designed to give you consistency. Use this switch for troubleshooting only. Terminating errors are still Terminating errors.
+- The script does not change the functional limits or considerations of Protection Policies. It just uses Protection Policies as the source of truth for Recovery Point Distribution.
+
 ## Parameter and Scenario Details
 
 The following parameters exist to drive the behaviour of the script:
@@ -51,6 +60,9 @@ The following parameters exist to drive the behaviour of the script:
 - `ctx_ProcessCitrixEnvironmentOnly`: Optional **`Switch`**. Switch parameter to indicate that we are purely updating Citrix Catalogs and not interacting with Nutanix. Used in a scenario where maybe some remediation work as been undertaken and only Citrix needs updating. Advanced Parameter for specific used cases.
 - `ctx_Snapshot`: Optional **`String`**. The name of the snapshot to be used with the `ctx_ProcessCitrixEnvironmentOnly` switch. This has no validation against Nutanix. Purely used to bring Citrix catalogs into line.
 - `APICallVerboseLogging`: Optional **`Switch`**.
+- `AdditionalPrismCentrals`: Optional **`Array`**. A manually defined array of Prism Central Instance IP addresses. These should be aligned to availability zones. This should only be used when the default discovery behaviors for Multi-AZ environments are problematic. This is an advanced param for troubleshooting or odd scenarios.
+- `ExcludedPrismCentrals`: Optional **`Array`**. A manually defined array of Prism Central Instance IP addresses to ignore from processing. This is an advanced param for troubleshooting or odd scenarios.
+- `IgnoreRecoveryPointDistributionValidation`: Optional **`Switch`**. A troubleshooting switch to ignore scenarios where Recovery Points are not available for all target clusters. This is an advanced param for troubleshooting or odd scenarios.
 
 The following examples use parameter splatting to make reading easier. A corresponding commandline example is also included:
 
@@ -90,11 +102,11 @@ The script will:
 - Creates a snapshot with an identical name based on the default `VMPrefix` value of `ctx_` + `BaseVM` + `Date`. For example: `ctx_CTX-Gold-01_2023-05-15-16-55-41`.
 - Delete all snapshots matching the above naming pattern older than `10` based on the `ImageSnapsToRetain` parameter
 - Deletes the temporary virtual machine created by the Recovery Point.
-- Log all output to the default `LogPath` directory of `C:\Logs\MCSReplicateBaseImageRP.log` and rollover logs after `5 days` based on the default `LogRollover` value.
+- Log all output to the default `LogPath` directory of `C:\Logs\MCSReplicateBaseImageRP.log` and rollover logs after `5` days based on the default `LogRollover` value.
  
- ### General Basic Suggested Use With Citrix Catalog updates across multiple Citrix Sites
+### General Basic Suggested Use With Citrix Catalog updates across multiple Citrix Sites
 
- This scenario builds upon the above, by allowing a multi Citrix Site update based on a JSON input:
+This scenario builds upon the above, by allowing a multi Citrix Site update based on a JSON input:
 
 ```
 $params = @{
@@ -151,5 +163,42 @@ The script will:
 - Creates a snapshot with an identical name based on the default `VMPrefix` value of `ctx_` + `BaseVM` + `Date`. For example: `ctx_CTX-Gold-01_2023-05-15-16-55-41`.
 - Delete all snapshots matching the above naming pattern older than `10` based on the `ImageSnapsToRetain` parameter
 - Deletes the temporary virtual machine created by the Recovery Point.
-- Log all output to the default `LogPath` directory of `C:\Logs\MCSReplicateBaseImageRP.log` and rollover logs after `5 days` based on the default `LogRollover` value.
+- Log all output to the default `LogPath` directory of `C:\Logs\MCSReplicateBaseImageRP.log` and rollover logs after `5` days based on the default `LogRollover` value.
 - If no replication failures have occurred in the Nutanix phase, update each Catalog listed in the `ctx_SiteConfigJSON` file.
+
+### 
+
+These scenarios handles some intricasies associated with Availability Zone configurations.
+
+```
+$params = @{
+    pc_source                                 = "1.1.1.1" # The source Prism Central Instance holding the base image vm
+    ProtectionPolicyName                      = "Citrix-Image-Replication" # The Protection Policy domain holding the base image vm
+    BaseVM                                    = "CTX-Gold-01" # The name of the Base image VM. Case sensitive.
+    ImageSnapsToRetain                        = 10 # The number of snapshots to retain in each PE cluster.
+    UseCustomCredentialFile                   = $true # Will look for a custom credential file. If not found, will create
+    AdditionalPrismCentrals                   = @("2.2.2.2") # will override source pc based discovery and add PC 2.2.2.2 to the mix resulting in 1.1.1.1 and 2.2.2.2 being processed
+    IgnoreRecoveryPointDistributionValidation = $true # will allow non terminating continuation if the recovery points are not distributed evenly or validation fails
+}
+& ReplicateCitrixBaseImageRP.ps1 @params 
+```
+The script will
+- Override the Prism Central discovered Availability Zone list with Prism Central 2.2.2.2. The source PC will still be processed.
+- Ignore validation issues that are non terminating.
+
+```
+$params = @{
+    pc_source                                 = "1.1.1.1" # The source Prism Central Instance holding the base image vm
+    ProtectionPolicyName                      = "Citrix-Image-Replication" # The Protection Policy domain holding the base image vm
+    BaseVM                                    = "CTX-Gold-01" # The name of the Base image VM. Case sensitive.
+    ImageSnapsToRetain                        = 10 # The number of snapshots to retain in each PE cluster.
+    UseCustomCredentialFile                   = $true # Will look for a custom credential file. If not found, will create
+    ExcludedPrismCentrals                     = @("3.3.3.3") # will use source pc based discovery and exclude PC 3.3.3.3 from being processed
+    IgnoreRecoveryPointDistributionValidation = $true # will allow non terminating continuation if the recovery points are not distributed evenly or validation fails
+}
+& ReplicateCitrixBaseImageRP.ps1 @params 
+```
+
+The script will
+- Remove the Prism Central 3.3.3.3 from the discovered list of PCs.
+- Ignore validation issues that are non terminating.
