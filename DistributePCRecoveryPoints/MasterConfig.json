@@ -1,0 +1,299 @@
+{
+    "ScriptDescription": "This script distributes a recovery point to one or many clusters, under one or many Prism Central Instances.",
+    "LoggingParams": {
+        "LogPath": "",
+        "LogRollover": 5
+    },
+    "PrismCentralParams": {
+        "SourcePC": "",
+        "AdditionalPrismCentrals": [],
+        "ExcludedPrismCentrals": [],
+        "ExcludedClusters": [],
+        "OverrideStorageContainer": ""
+    },
+    "SourceVMParams": {
+        "BaseVM": ""
+    },
+    "RecoveryPointParams": {
+        "RecoveryPoint": "",
+        "UseLatestRecoveryPoint": false
+    },
+    "OutputParams": {
+        "TempVMName": "TempAPIVM",
+        "OutputType": "PC-Template",
+        "VMPrefix": "ctx_",
+        "ImageSnapsOrTemplatesToRetain": 5
+    },
+    "CredentialParams": {
+        "UseCustomCredentialFile": true,
+        "CredPath" : "%USERPROFILE%\\Documents\\WindowsPowerShell\\CustomCredentials"
+    },
+    "CitrixParams": {
+        "DomainUser": "",
+        "DomainPassword": "",
+        "SingleSite": {
+            "ctx_AdminAddress": "",
+            "ctx_Catalogs": []
+        },
+        "MultieSite": {
+            "ctx_SiteConfigJSON" : ""
+        },
+        "CitrixCloud": {
+            "IsCitrixDaaS": false,
+            "ctx_Catalogs": [],
+            "CustomerID": "",
+            "ClientID": "",
+            "ClientSecret": "",
+            "Region": "",
+            "SecureClientFile": ""
+        }
+    },
+    "MiscParams": {
+        "SleepTime": 2,
+        "APICallVerboseLogging": false,
+        "ValidateOnly": false,
+        "BypassAllValidationErrors": false
+    },
+    "Param Descriptions": "The below reference outlines parameter information",
+    "Param Details" : {
+        "LoggingParams": {
+            "LogPath" : {
+                "Type": "string",
+                "Description": "This script distributes a recovery point from one Prism Central to another. It requires the source Prism Central, the Base VM, and the Recovery Point to be specified.",
+                "Example": "C:\\Logs\\DistributePCRecoveryPoints.log",
+                "Default": "C:\\Logs\\DistributePCRecoveryPoints.log",
+                "Mandatory": true
+            },
+            "LogRollover": {
+                "Type": "Integer",
+                "Description": "Number of log files to keep before rolling over",
+                "Example": 5,
+                "Default": 5,
+                "Mandatory": false
+            }
+        },
+        "PrismCentralParams": {
+            "SourcePC": {
+                "Type": "string",
+                "Description": "The Prism Central Instance hosting the Source VM",
+                "Example": "https://source-prism-central.example.com",
+                "Default": "",
+                "Mandatory": true
+            },
+            "AdditionalPrismCentrals": {
+                "Type": "Array",
+                "Description": "Additional Prism Central instances to query. These should align to Availability zone configurations. Overrides auto discovery based on AZ configurations",
+                "Example": ["1.1.1.1", "2.2.2.2"],
+                "Default": [],
+                "Mandatory": false
+            },
+            "ExcludedPrismCentrals": {
+                "Type": "Array",
+                "Description": "Excluded Prism Central instances. Used for rare cases where a PC should not be queried",
+                "Example": ["1.1.1.1", "2.2.2.2"],
+                "Default": [],
+                "Mandatory": false
+            },
+            "OverrideStorageContainer": {
+                "Type": "string",
+                "Description": "If set, will migrate the temp VM to this storage container before the snapshot is created",
+                "Example": "StorageContainer-12345",
+                "Default": "",
+                "Mandatory": false
+            }
+        },
+        "SourceVMParams": {
+            "BaseVM": {
+                "Type": "string",
+                "Description": "The Base VM to use for the recovery point",
+                "Example": "BaseVM-12345",
+                "Default": "",
+                "Mandatory": true
+            }
+        },
+        "RecoveryPointParams": {
+            "RecoveryPoint": {
+                "Type": "string",
+                "Description": "The Recovery Point to distribute to the target Prism Central",
+                "Example": "RecoveryPoint-67890",
+                "Default": "",
+                "Mandatory": true
+            },
+            "UseLatestRecoveryPoint": {
+                "Type": "boolean",
+                "Description": "A switch if calling PowerShell Direct. If true, the script will use the latest recovery point available for the Base VM",
+                "Example": true,
+                "Default": false,
+                "Mandatory": false
+            }
+        },
+        "OutputParams": {
+            "VMPrefix": {
+                "Type": "string",
+                "Description": "Prefix to use for the VM name when distributing the recovery point",
+                "Example": "ctx_",
+                "Default": "ctx_",
+                "Mandatory": false
+            },
+            "TempVMName": {
+                "Type": "string",
+                "Description": "Temporary VM name used during the distribution process",
+                "Example": "TempAPIVM",
+                "Default": "TempAPIVM",
+                "Mandatory": false
+            },
+            "OutputType": {
+                "Type": "string",
+                "Description": "The type of output to generate. Options include 'PC-Template' or 'PE-Snapshot'",
+                "Example": "PC-Template",
+                "Default": "PC-Template",
+                "Mandatory": false
+            },
+            "ImageSnapsOrTemplatesToRetain": {
+                "Type": "Integer",
+                "Description": "Number of image snapshots or templates to retain after distribution",
+                "Example": 5,
+                "Default": 5,
+                "Mandatory": false
+            }
+        },
+        "CredentialParams": {
+            "UseCustomCredentialFile": {
+                "Type": "boolean",
+                "Description": "A switch to indicate if a custom credential file is used for authentication",
+                "Example": true,
+                "Default": true,
+                "Mandatory": false
+            },
+            "CredPath": {
+                "Type": "string",
+                "Description": "Default path for custom credential file",
+                "Example": "$Env:USERPROFILE\\Documents\\WindowsPowerShell\\CustomCredentials",
+                "Default": "$Env:USERPROFILE\\Documents\\WindowsPowerShell\\CustomCredentials",
+                "Mandatory": false
+            }
+        },
+        "CitrixParams": {
+            "DomainUser": {
+                "Type": "string",
+                "Description": "The domain user to use for API calls for Citrix processing",
+                "Example": "bob@domain.internal",
+                "Default": "",
+                "Mandatory": false
+            },
+            "DomainPassword": {
+                "Type": "string",
+                "Description": "The domain user to use for API calls for Citrix processing",
+                "Example": "password123",
+                "Default": "",
+                "Mandatory": false
+            },
+            "SingleSite": {
+                "ctx_AdminAddress": {
+                    "Type": "string",
+                    "Description": "The Citrix DDC address to connect to for API calls",
+                    "Example": "10.10.10.10",
+                    "Default": "",
+                    "Mandatory": false
+                },
+                "ctx_Catalogs": {
+                    "Type": "Array",
+                    "Description": "Array of catalogs on a single Citrix site to process. If needing to update multiple sites, use the JSON input",
+                    "Example": ["Catalog1", "Catalog2"],
+                    "Default": [],
+                    "Mandatory": false
+                }
+            },
+            "MultieSite": {
+                "ctx_SiteConfigJSON": {
+                    "Type": "string",
+                    "Description": "JSON input file for multi site (or single site) Citrix site configurations. Catalogs and Delivery Controllers",
+                    "Example": "C:\\Configs\\CitrixSites.json",
+                    "Default": "",
+                    "Mandatory": false
+                }
+            },
+            "CitrixCloud": {
+                "IsCitrixDaaS": {
+                    "Type": "boolean",
+                    "Description": "A switch to indicate if the Citrix environment is Citrix DaaS",
+                    "Example": true,
+                    "Default": false,
+                    "Mandatory": false
+                },
+                "CustomerID": {
+                    "Type": "string",
+                    "Description": "The Customer ID to use for DaaS API calls",
+                    "Example": "customer-12345",
+                    "Default": "",
+                    "Mandatory": false
+                },
+                "ClientID": {
+                    "Type": "string",
+                    "Description": "The Client ID to use for DaaS API calls",
+                    "Example": "client-67890",
+                    "Default": "",
+                    "Mandatory": false
+                },
+                "ClientSecret": {
+                    "Type": "string",
+                    "Description": "The Client Secret to use for DaaS API calls",
+                    "Example": "secret-abcdef",
+                    "Default": "",
+                    "Mandatory": false
+                },
+                "Region": {
+                    "Type": "string",
+                    "Description": "The Citrix Cloud DaaS Tenant Region. Either AP-S (Asia Pacific), US (USA), EU (Europe) or JP (Japan)",
+                    "Example": "US",
+                    "Default": "US",
+                    "Mandatory": false
+                },
+                "SecureClientFile": {
+                    "Type": "string",
+                    "Description": "Path to the secure credential file for Citrix Cloud authentication",
+                    "Example": "$Env:USERPROFILE\\Documents\\Creds\\SecureClient.csv",
+                    "Default": "",
+                    "Mandatory": false
+                },
+                "ctx_Catalogs": {
+                    "Type": "Array",
+                    "Description": "Array of catalogs on a single Citrix site to process. If needing to update multiple sites, use the JSON input",
+                    "Example": ["Catalog1", "Catalog2"],
+                    "Default": [],
+                    "Mandatory": false
+                }
+            }
+        },
+        "MiscParams": {
+            "SleepTime": {
+                "Type": "Integer",
+                "Description": "Sleep time operations between task status polling in both v2 and v4 functions",
+                "Example": 2,
+                "Default": 2,
+                "Mandatory": false
+            },
+            "APICallVerboseLogging": {
+                "Type": "boolean",
+                "Description": "A switch to enable verbose logging for API calls",
+                "Example": true,
+                "Default": false,
+                "Mandatory": false
+            },
+            "ValidateOnly": {
+                "Type": "boolean",
+                "Description": "A switch to indicate if the script should only validate the environment without executing",
+                "Example": true,
+                "Default": false,
+                "Mandatory": false
+            },
+            "BypassAllValidationErrors": {
+                "Type": "boolean",
+                "Description": "A switch to bypass all validation errors. Use with caution as it may lead to unexpected results",
+                "Example": true,
+                "Default": false,
+                "Mandatory": false
+            }
+        }     
+    }
+}
