@@ -2495,6 +2495,10 @@ $PSDefaultParameterValues['Invoke-WebRequest:SkipHeaderValidation'] = $true
 
 #region Param Validation
 #-------------------------------------------------------------
+# General Parameter Validation
+if ([string]::IsNullOrEmpty($BaseVM)) { Write-Log -Message "[PARAM VALIDATION] BaseVM is required" -Level Error; Exit 1 }
+if ((-not [string]::IsNullOrEmpty($RecoveryPoint)) -and $UseLatestRecoveryPoint) { Write-Log -Message "[PARAM VALIDATION] UseLatestRecoveryPoint cannot be used with a specific RecoveryPoint" -Level Error; Exit 1 }
+
 # If Citrix Processing, Must have either Catalogs or SiteConfigJSON
 if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     if ([string]::IsNullOrEmpty($ctx_Catalogs) -and [string]::IsNullOrEmpty($ctx_SiteConfigJSON)) { Write-Log -Message "[PARAM VALIDATION] Catalogs or SiteConfigJSON is required for Citrix Processing" -Level Error; Exit 1 }
