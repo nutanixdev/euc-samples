@@ -97,6 +97,16 @@ Limitations and items of Note
 - The script requires that all Prism Centrals have the same authentication account (if you need different accounts per PC, update the script logic)
 - The script required that all Prism Elements have the same authentication account (if you need different accounts per PE, update the script logic)
 - If you choose to use Citrix integration, this integration is currently limited to PE based plugins.
+
+Update Notes
+- 01.09.2025
+    - Added logic to check for overlapping entries in AdditionalPrismCentrals and ExcludedPrismCentrals
+    - Updated ErrorCounts and fixed reporting outputs
+    - Cleaned up long running job outputs in StopIteration Function
+- 04.09.2025
+    - Fixed filering of clusters to exclude "PRISM_CENTRAL" function clusters rather than filtering out "Unnamed" clusters
+    - Added more detailed output of cluster details including IP and function during validation and processing
+
 .EXAMPLE
 See the README.md file in the same folder as this script for examples of how to use the script.
 
@@ -221,11 +231,23 @@ function Start-Stopwatch {
 function Stop-Stopwatch {
     Write-Log -Message "Stopping Timer" -Level Info
     $StopWatch.Stop()
+
     if ($StopWatch.Elapsed.TotalSeconds -le 1) {
         Write-Log -Message "Script processing took $($StopWatch.Elapsed.TotalMilliseconds) ms to complete." -Level Info
     }
-    else {
+    elseif ($StopWatch.Elapsed.TotalMinutes -le 1) {
         Write-Log -Message "Script processing took $($StopWatch.Elapsed.TotalSeconds) seconds to complete." -Level Info
+    }
+    elseif ($StopWatch.Elapsed.TotalHours -le 1) {
+        $minutes = [math]::Floor($StopWatch.Elapsed.TotalMinutes)
+        $seconds = $StopWatch.Elapsed.Seconds
+        Write-Log -Message "Script processing took $($minutes) minutes and $($seconds) seconds to complete." -Level Info
+    }
+    else {
+        $hours = [math]::Floor($StopWatch.Elapsed.TotalHours)
+        $minutes = $StopWatch.Elapsed.Minutes
+        $seconds = $StopWatch.Elapsed.Seconds
+        Write-Log -Message "Script processing took $($hours) hours, $($minutes) minutes, and $($seconds) seconds to complete." -Level Info
     }
 }
 
@@ -404,46 +426,6 @@ function Get-CustomCredentials {
         return $customCredentials
     }
 } # this function is used to retrieve saved credentials for the current user
-
-function Set-PoshTls {
-    <#
-    .SYNOPSIS
-    Makes sure we use the proper Tls version (1.2 only required for connection to Prism).
-
-    .DESCRIPTION
-    Makes sure we use the proper Tls version (1.2 only required for connection to Prism).
-
-    .NOTES
-    Author: Stephane Bourdeaud (sbourdeaud@nutanix.com)
-
-    .EXAMPLE
-    .\Set-PoshTls
-    Makes sure we use the proper Tls version (1.2 only required for connection to Prism).
-
-    .LINK
-    https://github.com/sbourdeaud
-    #>
-    [CmdletBinding(DefaultParameterSetName = 'None')] #make this function advanced
-
-    param 
-    (
-        
-    )
-
-    begin {
-    }
-
-    process {
-        Write-Log -Message "[SSL] Adding Tls12 support" -Level Info
-        [Net.ServicePointManager]::SecurityProtocol = `
-        ([Net.ServicePointManager]::SecurityProtocol -bor `
-                [Net.SecurityProtocolType]::Tls12)
-    }
-
-    end {
-
-    }
-} # this function is used to make sure we use the proper Tls version (1.2 only required for connection to Prism)
 
 #-----------------------------------------
 # Citrix API Functions
@@ -1471,7 +1453,6 @@ Function Get-PCRemoteConections {
 #-----------------------------------------
 # Nutanix API v4 Functions
 #-----------------------------------------
-
 function Invoke-PrismAPIv4 {
 
     [CmdletBinding()]
@@ -1914,7 +1895,7 @@ Function Invoke-PCRecoveryPointReplicate {
         return $replicate_recovery_point.data
     }
 
-} #This might need some updated error handling depending on requirements. What about Cluster Location for this one?
+} #This might need some updated error handling depending on requirements.
 
 Function Invoke-PCRecoveryPointRestore {
     [CmdletBinding()]
@@ -2499,6 +2480,14 @@ $PSDefaultParameterValues['Invoke-WebRequest:SkipHeaderValidation'] = $true
 if ([string]::IsNullOrEmpty($BaseVM)) { Write-Log -Message "[PARAM VALIDATION] BaseVM is required" -Level Error; Exit 1 }
 if ((-not [string]::IsNullOrEmpty($RecoveryPoint)) -and $UseLatestRecoveryPoint) { Write-Log -Message "[PARAM VALIDATION] UseLatestRecoveryPoint cannot be used with a specific RecoveryPoint" -Level Error; Exit 1 }
 
+# Check for overlapping entries in AdditionalPrismCentrals and ExcludedPrismCentrals
+if (-not [string]::IsNullOrEmpty($AdditionalPrismCentrals) -and -not [string]::IsNullOrEmpty($ExcludedPrismCentrals)) {
+    $overlapping_prism_central_entries = $AdditionalPrismCentrals | Where-Object { $_ -in $ExcludedPrismCentrals }
+    if ($overlapping_prism_central_entries) {
+        Write-Log -Message "[Validation] The following Prism Central entries exist in both AdditionalPrismCentrals and ExcludedPrismCentrals: $($overlapping_prism_central_entries -join ', ')" -Level Warn
+    }
+}
+
 # If Citrix Processing, Must have either Catalogs or SiteConfigJSON
 if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     if ([string]::IsNullOrEmpty($ctx_Catalogs) -and [string]::IsNullOrEmpty($ctx_SiteConfigJSON)) { Write-Log -Message "[PARAM VALIDATION] Catalogs or SiteConfigJSON is required for Citrix Processing" -Level Error; Exit 1 }
@@ -2522,6 +2511,8 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     }
     
 }
+
+
 #endregion Param Validation
 
 #Region Execute
@@ -2778,7 +2769,6 @@ if ($UseCustomCredentialFile) {
 # Initialise counts and variables
 #------------------------------------------------------------
 $total_error_count = 0 # start the error count
-$total_success_count = 0 # start the succes count
 $reporting_total_pre_validated_prism_centrals = 0
 $reporting_total_failed_pre_validated_prism_centrals = 0
 $reporting_total_processed_clusters = 0
@@ -2787,6 +2777,7 @@ $reporting_total_processed_prism_centrals = 0
 $reporting_total_ignored_prism_centrals = 0
 $reporting_total_pre_validated_validated_prism_elements = 0
 $reporting_total_failed_pre_validated_prism_elements = 0
+$reporting_total_failed_clusters = 0
 
 #region Learn about Nutanix availability zones
 #-------------------------------------------------------------
@@ -2798,7 +2789,7 @@ if (-not [string]::IsNullOrEmpty($availability_zones)) {
 }
 #endregion Learn about Nutanix availability zones
 
-#region Learn about Prism Centrals via remote_connections api.
+#region Learn about Prism Centrals via remote_connections api
 #-------------------------------------------------------------
 #This should only be run if the AdditionAlPrismCentrals parameter is not set
 if ([string]::IsNullOrEmpty($AdditionalPrismCentrals)) {
@@ -2909,14 +2900,16 @@ foreach ($pc in $prism_central_instances) {
 
     #region Validate the clusters under the Prism Central
     #-------------------------------------------------------------
-    $prism_central_owned_clusters = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"}).network.externalAddress.IPv4.value
+    #$prism_central_owned_clusters = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"}).network.externalAddress.IPv4.value
+    $prism_central_owned_clusters = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.cluster.config.clusterFunction -ne "PRISM_CENTRAL"}).network.externalAddress.IPv4.value
     if ([string]::IsNullOrEmpty($prism_central_owned_clusters)) {
         Write-Log -Message "[Prism Central] Could not find any Clusters under Prism Central Instance: $($pc)" -Level Warn
     } else {
         Write-Log -Message "[Prism Central] Found $(($prism_central_owned_clusters | Measure-Object).Count) Clusters under Prism Central Instance: $($pc)" -Level Info
-        $prism_central_owned_clusters_detail = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"}) | Where-Object {$_.network.externalAddress.IPv4.value -notin $ExcludedClusters}
+        #$prism_central_owned_clusters_detail = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"}) | Where-Object {$_.network.externalAddress.IPv4.value -notin $ExcludedClusters}
+        $prism_central_owned_clusters_detail = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.cluster.config.clusterFunction -ne "PRISM_CENTRAL"}) | Where-Object {$_.network.externalAddress.IPv4.value -notin $ExcludedClusters}
         foreach ($cluster in $prism_central_owned_clusters_detail | where-Object {$_ -notin $ExcludedClusters}) {
-            Write-Log -Message "[Cluster Validation] Cluster: $($cluster.name) AOS Version: $($cluster.config.buildInfo.version)" -Level Info
+            Write-Log -Message "[Cluster Validation] Cluster: $($cluster.name) AOS Version: $($cluster.config.buildInfo.version) and function: $($cluster.config.clusterFunction) with IP: $($cluster.network.externalAddress.ipv4.value)" -Level Info
         }
     }
     #endregion Validate the clusters under the Prism Central
@@ -3070,8 +3063,8 @@ if ($OutputType -eq "PC-Template") {
             #------------------------------------------------------------
             # Get the Cluster Details - We need to know where to send the RP
             #------------------------------------------------------------
-            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"} 
-            $target_cluster = $target_cluster_list | Select-Object -First 1 ### //JK How are we going to determine which cluster to use for this? I think we add an Array of Clusters as a Param. If not specified, use the first.
+            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" }#| Where-Object {$_.name -ne "Unnamed"} 
+            $target_cluster = $target_cluster_list | Select-Object -First 1
             
             #region Restore the Recovery Point
             #------------------------------------------------------------
@@ -3132,6 +3125,7 @@ if ($OutputType -eq "PC-Template") {
                         $task_status = Get-PCTaskv4 -pc $pc -TaskID $migration_task.extId -PrismCentralCredentials $PrismCentralCredentials -Phase "[Disk Migration]" -SleepTime 45
                         if ($task_status.status -ne "SUCCEEDED") {
                             Write-Log -Message "[Storage Container] Failed to migrate the restored VM: $($restored_vm.name) to the target Storage Container: $($target_container.name) on PC: $($pc). Task Status: $($task_status.status)" -Level Warn
+                            $total_pc_task_failures ++
                             Continue
                         }
                     }
@@ -3219,8 +3213,8 @@ if ($OutputType -eq "PC-Template") {
             #------------------------------------------------------------
             # Get the Cluster Details - We need to know where to send the RP
             #------------------------------------------------------------
-            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"} 
-            $target_cluster = $target_cluster_list | Select-Object -First 1 ### //JK How are we going to determine which cluster to use for this? I think we add an Array of Clusters as a Param. If not specified, use the first.
+            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" } #| Where-Object {$_.name -ne "Unnamed"} 
+            $target_cluster = $target_cluster_list | Select-Object -First 1
             
             #region Replicate the Recovery Point
             #------------------------------------------------------------
@@ -3316,6 +3310,7 @@ if ($OutputType -eq "PC-Template") {
                         $task_status = Get-PCTaskv4 -pc $pc -TaskID $migration_task.extId -PrismCentralCredentials $PrismCentralCredentials -Phase "[Disk Migration]" -SleepTime 45
                         if ($task_status.status -ne "SUCCEEDED") {
                             Write-Log -Message "[Storage Container] Failed to migrate the restored VM: $($restored_vm.name) to the target Storage Container: $($target_container.name) on PC: $($pc). Task Status: $($task_status.status)" -Level Warn
+                            $total_pc_task_failures ++
                             Continue
                         }
                     }
@@ -3472,7 +3467,7 @@ if ($OutputType -eq "PE-Snapshot") {
         #------------------------------------------------------------
         # Get the Cluster Details - We need to know where to send the RP
         #------------------------------------------------------------
-        $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"}
+        $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" } #| Where-Object {$_.name -ne "Unnamed"}
         $target_cluster_list = $target_cluster_list | Where-Object { $_.network.externalAddress.IPv4.value -notin $ExcludedClusters }
 
         $target_cluster_success_count = 0
@@ -3480,7 +3475,8 @@ if ($OutputType -eq "PE-Snapshot") {
         foreach ($target_cluster in $target_cluster_list) {
 
             Write-Log -Message "[Prism Central] ---------------------------------------------------------------------------- " -Level Info
-            Write-Log -Message "[Prism Central] Processing Cluster: $($target_cluster.name) under PC: $($pc)  " -Level Info
+            Write-Log -Message "[Prism Central] Processing Cluster: $($target_cluster.name) under Prism Central: $($pc)" -Level Info
+            Write-Log -Message "[Prism Central] Cluster IP: $($target_cluster.network.externalAddress.ipv4.value) and function: $($target_cluster.config.clusterFunction)" -Level Info
             Write-Log -Message "[Prism Central] ---------------------------------------------------------------------------- " -Level Info
 
             $target_cluster_ip = $target_cluster.network.externalAddress.IPv4.value
@@ -3548,6 +3544,7 @@ if ($OutputType -eq "PE-Snapshot") {
             if ([string]::IsNullOrEmpty($restore_recovery_point_task)) {
                 Write-Log -Message "[Recovery Point] Could not find the recovery point restore task detail on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $target_cluster_task_failures ++
                 Continue
             } else {
                 $null = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 5
@@ -3591,6 +3588,7 @@ if ($OutputType -eq "PE-Snapshot") {
                         $task_status = Get-PCTaskv4 -pc $pc -TaskID $migration_task.extId -PrismCentralCredentials $PrismCentralCredentials -Phase "[Disk Migration]" -SleepTime 45
                         if ($task_status.status -ne "SUCCEEDED") {
                             Write-Log -Message "[Storage Container] Failed to migrate the restored VM: $($restored_vm.name) to the target Storage Container: $($target_container.name) on PC: $($pc). Task Status: $($task_status.status)" -Level Warn
+                            $target_cluster_task_failures
                             Continue
                         }
                     }
@@ -3606,6 +3604,7 @@ if ($OutputType -eq "PE-Snapshot") {
 
             if ([string]::IsNullOrEmpty($pe_vm_list)) {
                 Write-Log -Message "[VM] Failed to retrieve virtual machines on the target cluster: $($target_cluster_name)" -Level Warn
+                $target_cluster_task_failures ++
                 Continue
             } else {
                 Write-Log -Message "[VM] There are $(($pe_vm_list | Measure-Object).Count) virtual machines on the target cluster: $($target_cluster_name)" -Level Info
@@ -3613,6 +3612,7 @@ if ($OutputType -eq "PE-Snapshot") {
                 $temp_vm_detail = $pe_vm_list | Where-Object {$_.uuid -eq $restored_vm.extId}
                 if ([string]::IsNullOrEmpty($temp_vm_detail)) {
                     Write-Log -Message "[VM] Failed to retrieve virtual machine $($restored_vm.name) on the target cluster: $($target_cluster_name)" -Level Warn
+                    $target_cluster_task_failures ++
                     Continue
                 } else {
                     Write-Log -Message "[VM] Found virtual machine $($temp_vm_detail.name) on the target cluster: $($target_cluster_name)" -Level Info
@@ -3685,6 +3685,7 @@ if ($OutputType -eq "PE-Snapshot") {
                 $etag = Get-PCRecoveryPointDetailForEtag -pc $pc -RPExtId $replicated_vm_recovery_point.extId -PrismCentralCredentials $PrismCentralCredentials
                 if ([string]::IsNullOrEmpty($etag)) {
                     Write-Log -Message "[Recovery Point] Could not find the Etag for the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
+                    $target_cluster_task_failures ++
                 } else {
                     $params = @{
                         pc                      = $pc
@@ -3701,7 +3702,12 @@ if ($OutputType -eq "PE-Snapshot") {
             
             #endregion Delete the replicate Recovery Point from the Cluster
 
-            If ($target_cluster_task_failures -eq 0) { $target_cluster_success_count ++ }
+            If ($target_cluster_task_failures -eq 0) { 
+                $target_cluster_success_count ++ 
+            } else { 
+                $total_error_count += $target_cluster_task_failures
+                $reporting_total_failed_clusters ++
+            }
         }
 
         $reporting_total_processed_clusters += $target_cluster_success_count
@@ -3723,6 +3729,7 @@ if ($OutputType -eq "PE-Snapshot") {
         $etag = Get-PCRecoveryPointDetailForEtag -pc $SourcePC -RPExtId $vm_recovery_point.ExtId -PrismCentralCredentials $PrismCentralCredentials
         if ([string]::IsNullOrEmpty($etag)) {
             Write-Log -Message "[Recovery Point] Could not find the Etag for the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
+            $total_pc_task_failures ++
         } else {
             $params = @{
                 pc                      = $SourcePC
@@ -3750,7 +3757,10 @@ Write-Log -Message "[Data] Ignored a total of $($Reporting_Total_Ignored_Prism_C
 if ($OutputType -eq "PE-Snapshot") {
     Write-Log -Message "[Data] Processed a total of $($Reporting_Total_Processed_Clusters) Clusters" -Level Info
     Write-Log -Message "[Data] Ignored a total of $($Reporting_Total_Ignored_Clusters) Clusters" -Level Info
-    Write-Log -Message "[Data] Successfully processed $($total_success_count) Clusters without error" -Level Info
+    Write-Log -Message "[Data] Successfully processed $($target_cluster_success_count) Clusters without error" -Level Info
+    if ($reporting_total_failed_clusters -gt 0) {
+        Write-Log -Message "[Data] Failed to process $($reporting_total_failed_clusters) Clusters" -Level Warn
+    }
 }
 Write-Log -Message "[Data] Encountered $($total_error_count) errors. Please review log file $($LogPath) for failures" -Level Info
 
