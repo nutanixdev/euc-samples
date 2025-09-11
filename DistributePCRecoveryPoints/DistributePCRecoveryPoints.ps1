@@ -2900,14 +2900,12 @@ foreach ($pc in $prism_central_instances) {
 
     #region Validate the clusters under the Prism Central
     #-------------------------------------------------------------
-    #$prism_central_owned_clusters = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"}).network.externalAddress.IPv4.value
-    $prism_central_owned_clusters = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.cluster.config.clusterFunction -ne "PRISM_CENTRAL"}).network.externalAddress.IPv4.value
+    $prism_central_owned_clusters = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.config.clusterFunction -ne "PRISM_CENTRAL"}).network.externalAddress.IPv4.value
     if ([string]::IsNullOrEmpty($prism_central_owned_clusters)) {
         Write-Log -Message "[Prism Central] Could not find any Clusters under Prism Central Instance: $($pc)" -Level Warn
     } else {
         Write-Log -Message "[Prism Central] Found $(($prism_central_owned_clusters | Measure-Object).Count) Clusters under Prism Central Instance: $($pc)" -Level Info
-        #$prism_central_owned_clusters_detail = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.name -ne "Unnamed"}) | Where-Object {$_.network.externalAddress.IPv4.value -notin $ExcludedClusters}
-        $prism_central_owned_clusters_detail = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.cluster.config.clusterFunction -ne "PRISM_CENTRAL"}) | Where-Object {$_.network.externalAddress.IPv4.value -notin $ExcludedClusters}
+        $prism_central_owned_clusters_detail = (Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object {$_.config.clusterFunction -ne "PRISM_CENTRAL"}) | Where-Object {$_.network.externalAddress.IPv4.value -notin $ExcludedClusters}
         foreach ($cluster in $prism_central_owned_clusters_detail | where-Object {$_ -notin $ExcludedClusters}) {
             Write-Log -Message "[Cluster Validation] Cluster: $($cluster.name) AOS Version: $($cluster.config.buildInfo.version) and function: $($cluster.config.clusterFunction) with IP: $($cluster.network.externalAddress.ipv4.value)" -Level Info
         }
@@ -3060,10 +3058,16 @@ if ($OutputType -eq "PC-Template") {
             # Get the PC Details
             #------------------------------------------------------------
             $target_pc = Get-PCDetails -pc $pc -PrismCentralCredentials $PrismCentralCredentials 
+            if ([string]::IsNullOrEmpty($target_pc)) {
+                Write-Log -Message "[Prism Central] Could not find the details for the target PC: $($pc). Will not process any further." -Level Error
+                $total_pc_task_failures ++
+                $total_error_count ++
+                Break
+            }
             #------------------------------------------------------------
             # Get the Cluster Details - We need to know where to send the RP
             #------------------------------------------------------------
-            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" }#| Where-Object {$_.name -ne "Unnamed"} 
+            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" } 
             $target_cluster = $target_cluster_list | Select-Object -First 1
             
             #region Restore the Recovery Point
@@ -3082,6 +3086,7 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($restore_recovery_point_task)) {
                 Write-Log -Message "[Recovery Point] Could not find the recovery point restore task detail on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             } else {
                 $null = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]"
@@ -3095,6 +3100,7 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($restored_vm)) {
                 Write-Log -Message "[VM] Could not find the restored VM: $($restored_vm.name) on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             }
             #endregion Learn about the restored VM
@@ -3109,6 +3115,7 @@ if ($OutputType -eq "PC-Template") {
                     if ([string]::IsNullOrEmpty($Etag)) {
                         Write-Log -Message "[Storage Container] Could not find the Etag for the restored VM: $($restored_vm.name) on PC: $($pc)" -Level Warn
                         $total_pc_task_failures ++
+                        $total_error_count ++
                         Continue
                     } else {
                         $Params = @{
@@ -3126,6 +3133,7 @@ if ($OutputType -eq "PC-Template") {
                         if ($task_status.status -ne "SUCCEEDED") {
                             Write-Log -Message "[Storage Container] Failed to migrate the restored VM: $($restored_vm.name) to the target Storage Container: $($target_container.name) on PC: $($pc). Task Status: $($task_status.status)" -Level Warn
                             $total_pc_task_failures ++
+                            $total_error_count ++
                             Continue
                         }
                     }
@@ -3141,6 +3149,7 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($create_pc_template_task)) {
                 Write-Log -Message "[Template] Could not find the create template task on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             } else {
                 $null = Get-PCTaskv4 -pc $pc -TaskID $create_pc_template_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Template]"
@@ -3159,6 +3168,7 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($vm_delete_task)) {
                 Write-Log -Message "[VM] Could not find the delete VM task on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             } else {
                 $null = Get-PCTaskv4 -pc $pc -TaskID $vm_delete_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[VM]" -SleepTime 10
@@ -3183,12 +3193,14 @@ if ($OutputType -eq "PC-Template") {
                         if ([string]::IsNullOrEmpty($etag)) {
                             Write-Log -Message "[Template] Could not find the Etag for the Template: $($template_to_delete.name) on PC: $($pc)" -Level Warn
                             $total_pc_task_failures ++
+                            $total_error_count ++
                             Continue
                         } else {
                             $template_delete_task = (Invoke-PCTemplateDelete -pc $pc -TemplateExtId $template_to_delete.extId -Etag $etag -PrismCentralCredentials $PrismCentralCredentials).ExtId
                             if ([string]::IsNullOrEmpty($template_delete_task)) {
                                 Write-Log -Message "[Template] Could not find the delete Template task on PC: $($pc)" -Level Warn
                                 $total_pc_task_failures ++
+                                $total_error_count ++
                                 Continue
                             } else {
                                 $null = Get-PCTaskv4 -pc $pc -TaskID $template_delete_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Template]" -SleepTime 5
@@ -3209,11 +3221,17 @@ if ($OutputType -eq "PC-Template") {
             #------------------------------------------------------------
             # Get the PC Details
             #------------------------------------------------------------
-            $target_pc = Get-PCDetails -pc $pc -PrismCentralCredentials $PrismCentralCredentials 
+            $target_pc = Get-PCDetails -pc $pc -PrismCentralCredentials $PrismCentralCredentials
+            if ([string]::IsNullOrEmpty($target_pc)) {
+                Write-Log -Message "[Prism Central] Could not find the details for the target PC: $($pc). Will not process any further." -Level Error
+                $total_pc_task_failures ++
+                $total_error_count ++
+                Break
+            }
             #------------------------------------------------------------
             # Get the Cluster Details - We need to know where to send the RP
             #------------------------------------------------------------
-            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" } #| Where-Object {$_.name -ne "Unnamed"} 
+            $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" } 
             $target_cluster = $target_cluster_list | Select-Object -First 1
             
             #region Replicate the Recovery Point
@@ -3231,9 +3249,10 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($replicate_recovery_point_task)) {
                 Write-Log -Message "[Recovery Point] Could not find recovery point replication task detail on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             } else {
-                $null = Get-PCTaskv4 -pc $SourcePC -TaskID $replicate_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 20
+                $null = Get-PCTaskv4 -pc $SourcePC -TaskID $replicate_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 45
             }
             #endregion Replicate the Recovery Point
             
@@ -3244,6 +3263,7 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($target_cluster_vm_recovery_point)) {
                 Write-Log -Message "[Recovery Point] Could not find the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             }
             $params = @{
@@ -3260,14 +3280,15 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($restore_recovery_point_task)) {
                 Write-Log -Message "[Recovery Point] Could not find restore task detail on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             } else {
                 $task_status = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 20
                 if ($task_status.status -eq "FAILED") {
                     Write-Log -Message "[Recovery Point] Restore task failed on PC: $($pc). Task ID: $($restore_recovery_point_task)" -Level Warn
                     $total_pc_task_failures ++
-                    StopIteration
-                    Exit 1
+                    $total_error_count ++
+                    Break
                 }
             }
             #endregion Restore the Recovery Point
@@ -3279,8 +3300,8 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($restored_vm)) {
                 Write-Log -Message "[VM] Could not find the restored VM: $($restored_vm.name) on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
-                StopIteration
-                Exit 1
+                $total_error_count ++
+                Break
             }
             #endregion Learn about the restored VM
 
@@ -3294,6 +3315,7 @@ if ($OutputType -eq "PC-Template") {
                     if ([string]::IsNullOrEmpty($Etag)) {
                         Write-Log -Message "[Storage Container] Could not find the Etag for the restored VM: $($restored_vm.name) on PC: $($pc)" -Level Warn
                         $total_pc_task_failures ++
+                        $total_error_count ++
                         Continue
                     } else {
                         $Params = @{
@@ -3311,6 +3333,7 @@ if ($OutputType -eq "PC-Template") {
                         if ($task_status.status -ne "SUCCEEDED") {
                             Write-Log -Message "[Storage Container] Failed to migrate the restored VM: $($restored_vm.name) to the target Storage Container: $($target_container.name) on PC: $($pc). Task Status: $($task_status.status)" -Level Warn
                             $total_pc_task_failures ++
+                            $total_error_count ++
                             Continue
                         }
                     }
@@ -3326,6 +3349,7 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($create_pc_template_task)) {
                 Write-Log -Message "[Template] Could not find create template task detail on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             } else {
                 $null = Get-PCTaskv4 -pc $pc -TaskID $create_pc_template_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Template]" -SleepTime 5
@@ -3338,12 +3362,14 @@ if ($OutputType -eq "PC-Template") {
             if ([string]::IsNullOrEmpty($etag)) {
                 Write-Log -Message "[VM] Could not find the Etag for the restored VM: $($restored_vm.name) on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             }
             $vm_delete_task = (Invoke-PCVMDelete -pc $pc -VMExtId $restored_vm.extId -Etag $etag -PrismCentralCredentials $PrismCentralCredentials).ExtId
             if ([string]::IsNullOrEmpty($vm_delete_task)) {
                 Write-Log -Message "[VM] Could not find delete VM task detail on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $total_error_count ++
                 Continue
             } else {
                 $null = Get-PCTaskv4 -pc $pc -TaskID $vm_delete_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[VM]" -SleepTime 10
@@ -3357,6 +3383,7 @@ if ($OutputType -eq "PC-Template") {
                 if ([string]::IsNullOrEmpty($etag)) {
                     Write-Log -Message "[Recovery Point] Could not find the Etag for the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
                     $total_pc_task_failures ++
+                    $total_error_count ++
                     Continue
                 }
                 $params = @{
@@ -3371,6 +3398,7 @@ if ($OutputType -eq "PC-Template") {
                 if ([string]::IsNullOrEmpty($recovery_point_delete_task)) {
                     Write-Log -Message "[Recovery Point] Could not find delete recovery point task detail on PC: $($pc)" -Level Warn
                     $total_pc_task_failures ++
+                    $total_error_count ++
                 } else {
                     $null = Get-PCTaskv4 -pc $pc -TaskID $recovery_point_delete_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 10
                 }
@@ -3393,12 +3421,14 @@ if ($OutputType -eq "PC-Template") {
                         if ([string]::IsNullOrEmpty($etag)) {
                             Write-Log -Message "[Template] Could not find the Etag for the Template: $($template_to_delete.name) on PC: $($pc)" -Level Warn
                             $total_pc_task_failures ++
+                            $total_error_count ++
                             Continue
                         } else {
                             $template_delete_task = (Invoke-PCTemplateDelete -pc $pc -TemplateExtId $template_to_delete.extId -Etag $etag -PrismCentralCredentials $PrismCentralCredentials).ExtId
                             if ([string]::IsNullOrEmpty($template_delete_task)) {
                                 Write-Log -Message "[Template] Could not find delete template task detail on PC: $($pc)" -Level Warn
                                 $total_pc_task_failures ++
+                                $total_error_count ++
                             } else {
                                 $null = Get-PCTaskv4 -pc $pc -TaskID $template_delete_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Template]" -SleepTime 5
                                 $template_deleted_success ++
@@ -3463,11 +3493,17 @@ if ($OutputType -eq "PE-Snapshot") {
         #------------------------------------------------------------
         # Get the PC Details
         #------------------------------------------------------------
-        $target_pc = Get-PCDetails -pc $pc -PrismCentralCredentials $PrismCentralCredentials 
+        $target_pc = Get-PCDetails -pc $pc -PrismCentralCredentials $PrismCentralCredentials
+        if ([string]::IsNullOrEmpty($target_pc)) {
+            Write-Log -Message "[Prism Central] Could not find the details for the target PC: $($pc). Will not process any further." -Level Error
+            $total_pc_task_failures ++
+            $total_error_count ++
+            Break
+        }
         #------------------------------------------------------------
         # Get the Cluster Details - We need to know where to send the RP
         #------------------------------------------------------------
-        $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" } #| Where-Object {$_.name -ne "Unnamed"}
+        $target_cluster_list = Get-PCClusters -pc $pc -PrismCentralCredentials $PrismCentralCredentials | Where-Object { $_.config.clusterFunction -ne "PRISM_CENTRAL" }
         $target_cluster_list = $target_cluster_list | Where-Object { $_.network.externalAddress.IPv4.value -notin $ExcludedClusters }
 
         $target_cluster_success_count = 0
@@ -3501,9 +3537,11 @@ if ($OutputType -eq "PE-Snapshot") {
                 if ([string]::IsNullOrEmpty($replicate_recovery_point_task)) {
                     Write-Log -Message "[Recovery Point] Could not find recovery point replication task detail on PC: $($pc)" -Level Warn
                     $target_cluster_task_failures ++
+                    $reporting_total_failed_clusters ++
+                    $total_error_count ++
                     Continue
                 } else {
-                    $task_status = Get-PCTaskv4 -pc $SourcePC -TaskID $replicate_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 20
+                    $task_status = Get-PCTaskv4 -pc $SourcePC -TaskID $replicate_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 45
                 }
             } else {
                 Write-Log -Message "[Recovery Point] Skipping Recovery Point replication Cluster $($target_cluster.name) as it already owns the Recovery Point" -Level Info
@@ -3521,6 +3559,8 @@ if ($OutputType -eq "PE-Snapshot") {
             if ([string]::IsNullOrEmpty($replicated_vm_recovery_point)) {
                 Write-Log -Message "[Recovery Point] Could not find the appropriate replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
                 $target_cluster_task_failures ++
+                $reporting_total_failed_clusters ++
+                $total_error_count ++
                 Continue
             } else {
                 Write-Log -Message "[Recovery Point] Found the replicated recovery point for the Source VM: $($source_vm.name) with ID $($replicated_vm_recovery_point.extId) on cluster $($target_cluster_name)" -Level Info
@@ -3545,9 +3585,11 @@ if ($OutputType -eq "PE-Snapshot") {
                 Write-Log -Message "[Recovery Point] Could not find the recovery point restore task detail on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
                 $target_cluster_task_failures ++
+                $reporting_total_failed_clusters ++
+                $total_error_count ++
                 Continue
             } else {
-                $null = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 5
+                $null = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 20
             }
             #endregion Restore the Recovery Point
 
@@ -3558,6 +3600,9 @@ if ($OutputType -eq "PE-Snapshot") {
             if ([string]::IsNullOrEmpty($restored_vm)) {
                 Write-Log -Message "[VM] Could not find the restored VM: $($restored_vm.name) on PC: $($pc)" -Level Warn
                 $total_pc_task_failures ++
+                $target_cluster_task_failures ++
+                $reporting_total_failed_clusters ++
+                $total_error_count ++
                 Continue
             }
             #endregion Search for the Temporary VM
@@ -3572,6 +3617,9 @@ if ($OutputType -eq "PE-Snapshot") {
                     if ([string]::IsNullOrEmpty($Etag)) {
                         Write-Log -Message "[Storage Container] Could not find the Etag for the restored VM: $($restored_vm.name) on PC: $($pc)" -Level Warn
                         $total_pc_task_failures ++
+                        $target_cluster_task_failures ++
+                        $reporting_total_failed_clusters ++
+                        $total_error_count ++
                         Continue
                     } else {
                         $Params = @{
@@ -3588,7 +3636,9 @@ if ($OutputType -eq "PE-Snapshot") {
                         $task_status = Get-PCTaskv4 -pc $pc -TaskID $migration_task.extId -PrismCentralCredentials $PrismCentralCredentials -Phase "[Disk Migration]" -SleepTime 45
                         if ($task_status.status -ne "SUCCEEDED") {
                             Write-Log -Message "[Storage Container] Failed to migrate the restored VM: $($restored_vm.name) to the target Storage Container: $($target_container.name) on PC: $($pc). Task Status: $($task_status.status)" -Level Warn
-                            $target_cluster_task_failures
+                            $target_cluster_task_failures ++
+                            $reporting_total_failed_clusters ++
+                            $total_error_count ++
                             Continue
                         }
                     }
@@ -3605,6 +3655,8 @@ if ($OutputType -eq "PE-Snapshot") {
             if ([string]::IsNullOrEmpty($pe_vm_list)) {
                 Write-Log -Message "[VM] Failed to retrieve virtual machines on the target cluster: $($target_cluster_name)" -Level Warn
                 $target_cluster_task_failures ++
+                $reporting_total_failed_clusters ++
+                $total_error_count ++
                 Continue
             } else {
                 Write-Log -Message "[VM] There are $(($pe_vm_list | Measure-Object).Count) virtual machines on the target cluster: $($target_cluster_name)" -Level Info
@@ -3613,6 +3665,8 @@ if ($OutputType -eq "PE-Snapshot") {
                 if ([string]::IsNullOrEmpty($temp_vm_detail)) {
                     Write-Log -Message "[VM] Failed to retrieve virtual machine $($restored_vm.name) on the target cluster: $($target_cluster_name)" -Level Warn
                     $target_cluster_task_failures ++
+                    $reporting_total_failed_clusters ++
+                    $total_error_count ++
                     Continue
                 } else {
                     Write-Log -Message "[VM] Found virtual machine $($temp_vm_detail.name) on the target cluster: $($target_cluster_name)" -Level Info
@@ -3628,6 +3682,8 @@ if ($OutputType -eq "PE-Snapshot") {
             if ([string]::IsNullOrEmpty($pe_snapshot_task)) {
                 Write-Log -Message "[VM Snapshot] Could not find the snapshot task detail on the target cluster: $($target_cluster_name)" -Level Warn
                 $target_cluster_task_failures ++
+                $reporting_total_failed_clusters ++
+                $total_error_count ++
                 Continue
             } else {
                 $null = Get-PETaskv2 -ClusterIP $target_cluster_ip -TaskID $pe_snapshot_task -PrismElementCredentials $PrismElementCredentials -Phase "[VM Snapshot]" -PhaseSuccessMessage "Snapshot: $($pe_snapshot_name) has been created" -SleepTime 5
@@ -3640,6 +3696,8 @@ if ($OutputType -eq "PE-Snapshot") {
             if ([string]::IsNullOrEmpty($pe_vm_delete_task)) {
                 Write-Log -Message "[VM] Could not find the delete VM task detail on the target cluster: $($target_cluster_name)" -Level Warn
                 $target_cluster_task_failures ++
+                $reporting_total_failed_clusters ++
+                $total_error_count ++
                 Continue
             } else {
                 $null = Get-PETaskv2 -ClusterIP $target_cluster_ip -TaskID $pe_vm_delete_task -PrismElementCredentials $PrismElementCredentials -Phase "[VM]" -PhaseSuccessMessage "Temporary VM: $($pe_vm_name) has been deleted" -SleepTime 5
@@ -3650,6 +3708,7 @@ if ($OutputType -eq "PE-Snapshot") {
             #------------------------------------------------------------
             if (-not [string]::IsNullOrEmpty($ImageSnapsOrTemplatesToRetain)){
                 $snapshot_deleted_success = 0
+                $snapshot_deleted_failures = 0
                 Write-Log -Message "[VM Snapshot] Retaining only the last $($ImageSnapsOrTemplatesToRetain) snapshots. Deleting older snapshots on cluster $($target_cluster_name)" -Level Info
                 $pe_snapshot_list = Get-PESnapshotListv2 -ClusterIP $target_cluster_ip -PrismElementCredentials $PrismElementCredentials
                 Write-Log -Message "[VM Snapshot] There are $(($pe_snapshot_list | Measure-Object).Count) snapshots on the target cluster: $($target_cluster_name)" -Level Info
@@ -3663,6 +3722,8 @@ if ($OutputType -eq "PE-Snapshot") {
                         if ([string]::IsNullOrEmpty($snapshot_delete_task)) {
                             Write-Log -Message "[Snapshot] Could not find the delete snapshot task on the target cluster: $($target_cluster_name)" -Level Warn
                             $target_cluster_task_failures ++
+                            $snapshot_deleted_failures ++
+                            $total_error_count ++
                             Continue
                         } else {
                             $null = Get-PETaskv2 -ClusterIP $target_cluster_ip -TaskID $snapshot_delete_task -PrismElementCredentials $PrismElementCredentials -Phase "[VM Snapshot]"
@@ -3686,6 +3747,8 @@ if ($OutputType -eq "PE-Snapshot") {
                 if ([string]::IsNullOrEmpty($etag)) {
                     Write-Log -Message "[Recovery Point] Could not find the Etag for the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
                     $target_cluster_task_failures ++
+                    $reporting_total_failed_clusters ++
+                    $total_error_count ++
                 } else {
                     $params = @{
                         pc                      = $pc
@@ -3704,9 +3767,6 @@ if ($OutputType -eq "PE-Snapshot") {
 
             If ($target_cluster_task_failures -eq 0) { 
                 $target_cluster_success_count ++ 
-            } else { 
-                $total_error_count += $target_cluster_task_failures
-                $reporting_total_failed_clusters ++
             }
         }
 
@@ -3730,6 +3790,7 @@ if ($OutputType -eq "PE-Snapshot") {
         if ([string]::IsNullOrEmpty($etag)) {
             Write-Log -Message "[Recovery Point] Could not find the Etag for the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
             $total_pc_task_failures ++
+            $total_error_count ++
         } else {
             $params = @{
                 pc                      = $SourcePC
@@ -3752,12 +3813,12 @@ if ($OutputType -eq "PE-Snapshot") {
 #endregion Process each PC
 
 Write-Log -Message "[Data] ---------------- Results Outputs ----------------" -Level Info
-Write-Log -Message "[Data] Processed a total of $($Reporting_Total_Processed_Prism_Centrals) Prism Centrals" -Level Info
-Write-Log -Message "[Data] Ignored a total of $($Reporting_Total_Ignored_Prism_Centrals) Prism Centrals" -Level Info
+Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_prism_centrals) Prism Centrals" -Level Info
+Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_prism_centrals) Prism Centrals" -Level Info
 if ($OutputType -eq "PE-Snapshot") {
-    Write-Log -Message "[Data] Processed a total of $($Reporting_Total_Processed_Clusters) Clusters" -Level Info
-    Write-Log -Message "[Data] Ignored a total of $($Reporting_Total_Ignored_Clusters) Clusters" -Level Info
-    Write-Log -Message "[Data] Successfully processed $($target_cluster_success_count) Clusters without error" -Level Info
+    Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_clusters) Clusters" -Level Info
+    Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_clusters) Clusters" -Level Info
+    Write-Log -Message "[Data] Successfully processed $($reporting_total_processed_clusters) Clusters without error" -Level Info
     if ($reporting_total_failed_clusters -gt 0) {
         Write-Log -Message "[Data] Failed to process $($reporting_total_failed_clusters) Clusters" -Level Warn
     }
