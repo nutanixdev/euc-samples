@@ -3089,7 +3089,10 @@ if ($OutputType -eq "PC-Template") {
                 $total_error_count ++
                 Continue
             } else {
+                $task_timer = [System.Diagnostics.Stopwatch]::StartNew()
                 $null = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]"
+                $task_timer.Stop()
+                Write-Log -Message "[Recovery Point] Restore task completed in $($task_timer.Elapsed.Minutes) minutes $($task_timer.Elapsed.Seconds) seconds for the Recovery Point: $($vm_recovery_point.name) on PC: $($pc)" -Level Info
             }
             #endregion Restore the Recovery Point
 
@@ -3252,7 +3255,10 @@ if ($OutputType -eq "PC-Template") {
                 $total_error_count ++
                 Continue
             } else {
+                $task_timer = [System.Diagnostics.Stopwatch]::StartNew()
                 $null = Get-PCTaskv4 -pc $SourcePC -TaskID $replicate_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 45
+                $task_timer.Stop()
+                Write-Log -Message "[Recovery Point] Replication task completed in $($task_timer.Elapsed.Minutes) minutes $($task_timer.Elapsed.Seconds) seconds for the Recovery Point: $($vm_recovery_point.name) to PC: $($pc)" -Level Info
             }
             #endregion Replicate the Recovery Point
             
@@ -3283,13 +3289,17 @@ if ($OutputType -eq "PC-Template") {
                 $total_error_count ++
                 Continue
             } else {
+                $task_timer = [System.Diagnostics.Stopwatch]::StartNew()
                 $task_status = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 20
                 if ($task_status.status -eq "FAILED") {
                     Write-Log -Message "[Recovery Point] Restore task failed on PC: $($pc). Task ID: $($restore_recovery_point_task)" -Level Warn
+                    $task_timer.Stop()
                     $total_pc_task_failures ++
                     $total_error_count ++
                     Break
                 }
+                $task_timer.Stop()
+                Write-Log -Message "[Recovery Point] Restore task completed in $($task_timer.Elapsed.Minutes) minutes $($task_timer.Elapsed.Seconds) seconds for the Recovery Point: $($target_cluster_vm_recovery_point.name) on PC: $($pc)" -Level Info
             }
             #endregion Restore the Recovery Point
 
@@ -3541,7 +3551,10 @@ if ($OutputType -eq "PE-Snapshot") {
                     $total_error_count ++
                     Continue
                 } else {
+                    $task_timer = [System.Diagnostics.Stopwatch]::StartNew()
                     $task_status = Get-PCTaskv4 -pc $SourcePC -TaskID $replicate_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 45
+                    $task_timer.Stop()
+                    Write-Log -Message "[Recovery Point] Replication task completed in $($task_timer.Elapsed.Minutes) minutes $($task_timer.Elapsed.Seconds) seconds for the Recovery Point: $($vm_recovery_point.name) to Cluster: $($target_cluster_name) on PC: $($pc)" -Level Info
                 }
             } else {
                 Write-Log -Message "[Recovery Point] Skipping Recovery Point replication Cluster $($target_cluster.name) as it already owns the Recovery Point" -Level Info
@@ -3589,7 +3602,10 @@ if ($OutputType -eq "PE-Snapshot") {
                 $total_error_count ++
                 Continue
             } else {
+                $task_timer = [System.Diagnostics.Stopwatch]::StartNew()
                 $null = Get-PCTaskv4 -pc $pc -TaskID $restore_recovery_point_task -PrismCentralCredentials $PrismCentralCredentials -Phase "[Recovery Point]" -SleepTime 20
+                $task_timer.Stop()
+                Write-Log -Message "[Recovery Point] Restore task completed in $($task_timer.Elapsed.Minutes) minutes $($task_timer.Elapsed.Seconds) seconds for the Recovery Point: $($replicated_vm_recovery_point.name) on cluster: $($target_cluster.name) on PC: $($pc)" -Level Info
             }
             #endregion Restore the Recovery Point
 
