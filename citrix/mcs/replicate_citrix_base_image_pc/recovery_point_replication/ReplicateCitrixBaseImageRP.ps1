@@ -1578,6 +1578,7 @@ foreach ($_ in $AvailabilityZones.entities) {
 #region Get PC Remote Connections
 #------------------------------------------
 $remote_connections = Get-PCRemoteConections -pc $pc_source
+$remote_connections = $remote_connections | Where-Object {$_.entities.status.resources.remote_connection_info.cluster_function -eq "PRISM_CENTRAL"}
 
 foreach ($_ in $remote_connections.entities.status.resources.remote_address.ip) {
     $remote_ip = $_

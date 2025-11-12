@@ -2794,6 +2794,7 @@ if (-not [string]::IsNullOrEmpty($availability_zones)) {
 #This should only be run if the AdditionAlPrismCentrals parameter is not set
 if ([string]::IsNullOrEmpty($AdditionalPrismCentrals)) {
     $prism_centrals = Get-PCRemoteConections -pc $SourcePC -PrismCentralCredentials $PrismCentralCredentials
+    $prism_centrals = $prism_centrals | Where-Object {$_.status.resources.remote_connection_info.cluster_function -eq "PRISM_CENTRAL"}
     if (-not [string]::IsNullOrEmpty($prism_centrals)) {
         foreach ($_ in $prism_centrals.status.resources.remote_address.ip) {
             $remote_ip = $_
