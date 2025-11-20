@@ -116,9 +116,8 @@ The following parameters exist to drive the behaviour of the script. All `Mandat
 The script supports both Citrix VAD and DaaS deployments using the Citrix API
 
 CVAD Params:
-
-- `DomainUser`: Optional. **`String`**. The domain user to use for API calls for Citrix processing. If not specified, the script will prompt for credentials.
-- `DomainPassword`: Optional. **`String`**. The domain password to use for API calls for Citrix processing. If not specified, the script will prompt for credentials.
+- `DomainUser`: Optional. **`String`**. The domain user to use for API calls for Citrix (VAD) processing. Used for API auth. If UseCustomCredentialFile is set, this is ignored. If neither this, nor UseCustomCredentialFile is set, the script will exit.
+- `DomainPassword`: Optional. **`String`**. The domain password to use for API calls for Citrix (VAD) processing. Used for API auth. If UseCustomCredentialFile is set, this is ignored. If neither this, nor UseCustomCredentialFile is set, the script will exit.
 - `ctx_AdminAddress`: Optional **`String`**. The Delivery Controller to target for Citrix Catalog updates. Single Citrix Site parameter only. For multi-site, use `ctx_siteConfigJSON` switch.
 - `ctx_Catalogs`: Optional **`Array`**. A list of Citrix Catalogs to update after the Snapshot replication has finished. User running the script must have sufficient rights on the Citrix Site. Single Citrix Site parameter only. For multi-site, use `ctx_siteConfigJSON` switch.
 - `ctx_SiteConfigJSON`: Optional **`String`**. A JSON file containing a list of Catalogs and associated Delivery Controllers for a multi-site environment. This will override the `ctx_AdminAddress` and `ctx_Catalogs` parameters.
@@ -324,8 +323,6 @@ $params = @{
     ImageSnapsOrTemplatesToRetain = 5
     UseCustomCredentialFile = $true
     CredPath = "$Env:USERPROFILE\Documents\WindowsPowerShell\CustomCredentials"
-    DomainUser = "admin_account@shnazzydomain.com"
-    DomainPassword = "super_securepwd##"
     ctx_Catalogs = @("Catalog1","Catalog2")
     ctx_AdminAddress = "DDC1.shnazzydomain.com"
 }
@@ -334,14 +331,14 @@ $params = @{
 ```
 
 ```
-& "DistributePCRecoveryPoints.ps1" -LogPath "C:\Logs\DistributePCRecoveryPoints.log" -LogRollover 5 -SourcePC "1.1.1.1" -BaseVM "W11-JK-GLD" -VMPrefix "ctx_" -TempVMName "TempAPIVM" -OutputType "PE-Snapshot" -ImageSnapsOrTemplatesToRetain 5 -UseCustomCredentialFile -CredPath "$Env:USERPROFILE\Documents\WindowsPowerShell\CustomCredentials" -DomainUser "admin_account@shnazzydomain.com" -DomainPassword "super_securepwd##" -ctx_Catalogs @("Catalog1","Catalog2") -ctx_AdminAddress "DDC1.shnazzydomain.com"
+& "DistributePCRecoveryPoints.ps1" -LogPath "C:\Logs\DistributePCRecoveryPoints.log" -LogRollover 5 -SourcePC "1.1.1.1" -BaseVM "W11-JK-GLD" -VMPrefix "ctx_" -TempVMName "TempAPIVM" -OutputType "PE-Snapshot" -ImageSnapsOrTemplatesToRetain 5 -UseCustomCredentialFile -CredPath "$Env:USERPROFILE\Documents\WindowsPowerShell\CustomCredentials" -ctx_Catalogs @("Catalog1","Catalog2") -ctx_AdminAddress "DDC1.shnazzydomain.com"
 ```
 
 The above example will:
 - Use PC `1.1.1.1` as the source PC. It will learn any additional PCs configured in an AZ pairing.
 - Use the `W11-JK-GLD` VM as the source VM, and output snapshots with the `ctx_` prefix. The last `5 snapshots` matching this prefix will be retained, older snapshots will be `deleted`.
 - Will prompt and store credentials in the specified `CredPath`. Second runs will use the stored credentials. If they need to be deleted or reset, delete the files in the `CredPath`.
-- Will process the Citrix Catalogs `Catalog1` and `Catalog2` on the `DDC1.shnazzydomain.com` Delivery Controller. using the `DomainUser` and `DomainPassword` provided. Using the Citrix API.
+- Will process the Citrix Catalogs `Catalog1` and `Catalog2` on the `DDC1.shnazzydomain.com` Delivery Controller. Will store credentials and use them for authenticating against the Citrix API. Use `admin@shnazzydomain.com` as the username format when prompted.
 - Will log to `C:\Logs\DistributePCRecoveryPoints.log`.
 
 ### Simple Mesh Topology updating Citrix Catalogs in Citrix DaaS useing a Secure Client

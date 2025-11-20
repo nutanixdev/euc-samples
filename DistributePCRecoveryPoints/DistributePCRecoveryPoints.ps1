@@ -47,9 +47,9 @@ Optional. String. Default path for custom credential file. Default is "$Env:USER
 .PARAMETER OverrideStorageContainer
 Optional. String. If set, will migrate the temp VM to this storage container before the snapshot is created. This is useful if you want to ensure that the snapshot is created in a specific storage container. See the limitation notes for more info.
 .PARAMETER DomainUser
-Optional. String. The domain user to use for API calls for Citrix processing. If not specified, the script will prompt for credentials.
+Optional. String. The domain user to use for API calls for Citrix (VAD) processing. Used for API auth. If UseCustomCredentialFile is set, this is ignored. If neither this, nor UseCustomCredentialFile is set, the script will exit.
 .PARAMETER DomainPassword
-Optional. String. The domain password to use for API calls for Citrix processing. If not specified, the script will prompt for credentials.
+Optional. String. The domain password to use for API calls for Citrix (VAD) processing. Used for API auth. If UseCustomCredentialFile is set, this is ignored. If neither this, nor UseCustomCredentialFile is set, the script will exit.
 .PARAMETER ctx_Catalogs
 Optional. Array. Array of catalogs on a single Citrix site to process. If needing to update multiple sites, use the JSON input.
 .PARAMETER ctx_AdminAddress
@@ -106,6 +106,9 @@ Update Notes
 - 04.09.2025
     - Fixed filering of clusters to exclude "PRISM_CENTRAL" function clusters rather than filtering out "Unnamed" clusters
     - Added more detailed output of cluster details including IP and function during validation and processing
+- 20.11.2025
+    - Added a Fix for Recovery Point Deletion occuring when an existing Recovery Point is specified. We should only delete when we create.
+    - Added logic to support UseCustomCredentialFile for Citrix (VAD) processing.
 
 .EXAMPLE
 See the README.md file in the same folder as this script for examples of how to use the script.
@@ -136,8 +139,8 @@ Param(
     [Parameter(Mandatory = $false)][String]$CredPath = "$Env:USERPROFILE\Documents\WindowsPowerShell\CustomCredentials", # Default path for custom credential file
     [Parameter(Mandatory = $false)][string]$OverrideStorageContainer, # If set, will migrate the temp VM to this storage container before the snapshot is created.
     ###------------- Citrix Params
-    [Parameter(Mandatory = $false)][string]$DomainUser, # The domain user to use for API calls for Citrix processing
-    [Parameter(Mandatory = $false)][string]$DomainPassword, # The domain password to use for API calls for Citrix processing
+    [Parameter(Mandatory = $false)][string]$DomainUser, # The domain user to use for API calls for Citrix (VAD) processing. Used for API auth. If UseCustomCredentialFile is set, this is ignored.
+    [Parameter(Mandatory = $false)][string]$DomainPassword, # The domain password to use for API calls for Citrix (VAD) processing. Used for API auth. If UseCustomCredentialFile is set, this is ignored.
     [Parameter(Mandatory = $false)][Array]$ctx_Catalogs, # Array of catalogs on a single Citrix site to process. If needing to update multiple sites, use the JSON input
     ###------------- Citrix VAD Params
     [Parameter(Mandatory = $false)][String]$ctx_AdminAddress, # Delivery Controller address on a single Citrix site to process. If needing to update multiple sites, use the JSON input
@@ -2504,14 +2507,13 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
         if ([string]::IsNullOrEmpty($CustomerID)) { Write-Log -Message "[PARAM VALIDATION] CustomerID is required for Citrix DaaS" -Level Error; Exit 1 }
         if ([string]::IsNullOrEmpty($Region)) { Write-Log -Message "[PARAM VALIDATION] Region is required for Citrix DaaS" -Level Error; Exit 1 }
     }
-    if (-not $IsCitrixDaaS) {
+    if ((-not $IsCitrixDaaS) -and (-not $UseCustomCredentialFile)) {
         # Must have either DomainUser and DomainPassword for API access. Means we can use the same functions for CVAD and DaaS.
         if ([string]::IsNullOrEmpty($DomainUser)) { Write-Log -Message "[PARAM VALIDATION] DomainUser is required for Citrix Processing" -Level Error; Exit 1 }
         if ([string]::IsNullOrEmpty($DomainPassword)) { Write-Log -Message "[PARAM VALIDATION] DomainPassword is required for Citrix Processing" -Level Error; Exit 1 }
     }
     
 }
-
 
 #endregion Param Validation
 
@@ -2573,8 +2575,27 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
         $Global:EncodedAdminCredential = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("ADummyValueBecauseThisIsNotNeededForDaaS"))
     } else {
         $Global:DDC = $ctx_AdminAddress
+        if ($UseCustomCredentialFile) {
+            # credentials for Citrix API
+            $CitrixCreds = "citrix-api-creds"
+            Write-Log -Message "[Credentials] UseCustomCredentialFile has been selected. Attempting to retrieve credential object for the Citrix API" -Level Info
+            try {
+                $CitrixCredentials = Get-CustomCredentials -credname $CitrixCreds -ErrorAction Stop
+                # Convert PSCredential to username:password string format for base64 encoding
+                $AdminCredential = "$($CitrixCredentials.UserName):$($CitrixCredentials.GetNetworkCredential().Password)"
+            }
+            catch {
+                Set-CustomCredentials -credname $CitrixCreds
+                $CitrixCredentials = Get-CustomCredentials -credname $CitrixCreds -ErrorAction Stop
+                # Convert PSCredential to username:password string format for base64 encoding
+                $AdminCredential = "$($CitrixCredentials.UserName):$($CitrixCredentials.GetNetworkCredential().Password)"
+            }
+        } else {
+            # these have been specified via either param or in the JSON file
+            $AdminCredential = "$($DomainUser):$($DomainPassword)"
+        }
         # Convert Username and Password to base64. This is used to talk to Citrix API. Note that we set this regardless of DaaS of CVAD so that we can use the same functions.
-        $AdminCredential = "$($DomainUser):$($DomainPassword)"
+        #$AdminCredential = "$($DomainUser):$($DomainPassword)"
         $Bytes = [System.Text.Encoding]::UTF8.GetBytes($AdminCredential)
         $Global:EncodedAdminCredential = [Convert]::ToBase64String($Bytes)
     }
@@ -2727,7 +2748,7 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
 if ($UseCustomCredentialFile) {
     # credentials for PC
     $PrismCentralCreds = "prism-central-creds"
-    Write-Log -Message "[Credentials] UseCustomCredentialFile has been selected. Attempting to retrieve credential object" -Level Info
+    Write-Log -Message "[Credentials] UseCustomCredentialFile has been selected. Attempting to retrieve credential object for Prism Central" -Level Info
     try {
         $PrismCentralCredentials = Get-CustomCredentials -credname $PrismCentralCreds -ErrorAction Stop
     }
@@ -2737,7 +2758,7 @@ if ($UseCustomCredentialFile) {
     }
     # credentials for PE
     $PrismElementCreds = "prism-element-creds"
-    Write-Log -Message "[Credentials] UseCustomCredentialFile has been selected. Attempting to retrieve credential object" -Level Info
+    Write-Log -Message "[Credentials] UseCustomCredentialFile has been selected. Attempting to retrieve credential object for Prism Element" -Level Info
     try {
         $PrismElementCredentials = Get-CustomCredentials -credname $PrismElementCreds -ErrorAction Stop
     }
@@ -3389,7 +3410,8 @@ if ($OutputType -eq "PC-Template") {
 
             #region Delete the Recovery Point - Only if we created one
             #------------------------------------------------------------
-            if (-not [string]::IsNullOrEmpty($RecoveryPoint) -or $UseLatestRecoveryPoint -ne $true) {
+            #if (-not [string]::IsNullOrEmpty($RecoveryPoint) -or $UseLatestRecoveryPoint -ne $true) {
+            if ([string]::IsNullOrEmpty($RecoveryPoint) -and $UseLatestRecoveryPoint -ne $true) {
                 $etag = Get-PCRecoveryPointDetailForEtag -pc $pc -RPExtId $target_cluster_vm_recovery_point.ExtId -PrismCentralCredentials $PrismCentralCredentials
                 if ([string]::IsNullOrEmpty($etag)) {
                     Write-Log -Message "[Recovery Point] Could not find the Etag for the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
