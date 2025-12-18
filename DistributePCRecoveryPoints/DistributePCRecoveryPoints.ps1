@@ -3822,7 +3822,7 @@ if ($OutputType -eq "PE-Snapshot") {
     
     #region Delete the Recovery Point from the source PC - Only if we created one
     #------------------------------------------------------------
-    if (-not [string]::IsNullOrEmpty($RecoveryPoint) -or $UseLatestRecoveryPoint -ne $true) {
+    if ([string]::IsNullOrEmpty($RecoveryPoint) -and $UseLatestRecoveryPoint -ne $true) {
         $etag = Get-PCRecoveryPointDetailForEtag -pc $SourcePC -RPExtId $vm_recovery_point.ExtId -PrismCentralCredentials $PrismCentralCredentials
         if ([string]::IsNullOrEmpty($etag)) {
             Write-Log -Message "[Recovery Point] Could not find the Etag for the replicated recovery point for the Source VM: $($source_vm.name) on PC: $($pc)" -Level Warn
