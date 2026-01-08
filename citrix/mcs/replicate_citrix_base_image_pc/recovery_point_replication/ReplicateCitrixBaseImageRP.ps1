@@ -81,6 +81,7 @@
     # 13.06.2023: Initial release
     # 18.10.2023: Updated to handle large recovery point sets
     # 10.02.2025: Updated to handle multiple Availability Zones
+    # 07.01.2026: Fixed filering of clusters to exclude "PRISM_CENTRAL" function clusters rather than filtering out "Unnamed" clusters
     #--------------------------------------------------------------------------------------------------------#
 
 #>
@@ -1619,7 +1620,8 @@ foreach ($pc in $PrismCentralInstances ) {
     #---------------------------------------------
     $TotalClusters = Get-PCClusters -pc $pc
 
-    $Clusters = $TotalClusters.entities | Where-Object {$_.status.name -ne "Unnamed"}
+    #$Clusters = $TotalClusters.entities | Where-Object {$_.status.name -ne "Unnamed"}
+    $Clusters = $TotalClusters.entities | Where-Object {$_.config.clusterFunction -ne "PRISM_CENTRAL"}
     Write-Log -Message "[Cluster] There are $(($Clusters | Measure-Object).Count) Clusters under the Prism Central Instance $($pc)" -Level Info
 
     foreach ($_ in $Clusters | Where-Object {$_.status.resources.network.external_ip -ne $null}) {
@@ -1736,7 +1738,8 @@ foreach ($Instance in $PrismCentralInstances) {
     }
 
     $PC_Specific_Clusters = Get-PCClusters -pc $pc 
-    $PC_Specific_Clusters = ($PC_Specific_Clusters.entities | Where-Object {$_.status.name -ne "Unnamed"}).metadata.uuid
+    #$PC_Specific_Clusters = ($PC_Specific_Clusters.entities | Where-Object {$_.status.name -ne "Unnamed"}).metadata.uuid
+    $PC_Specific_Clusters = ($PC_Specific_Clusters.entities | Where-Object {$_.config.clusterFunction -ne "PRISM_CENTRAL"}).metadata.uuid
     $PC_Specific_Clusters = $PC_Specific_Clusters | Where-Object {$_ -in $ClustersInProtectionRule}
 
     # Pull the Recovery Points for Validation
@@ -1880,7 +1883,8 @@ foreach ($Instance in $PrismCentralInstances) {
     #---------------------------------------------
     $TotalClusters = Get-PCClusters -pc $pc
 
-    $Clusters = $TotalClusters.entities | Where-Object {$_.status.name -ne "Unnamed"}
+    #$Clusters = $TotalClusters.entities | Where-Object {$_.status.name -ne "Unnamed"}
+    $Clusters = $TotalClusters.entities | Where-Object {$_.config.clusterFunction -ne "PRISM_CENTRAL"}
 
     foreach ($_ in $Clusters | Where-Object { $_.status.resources.network.external_ip -ne $null } ) {
         $cluster_name = $_.status.name
