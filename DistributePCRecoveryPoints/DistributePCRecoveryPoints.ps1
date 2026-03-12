@@ -109,6 +109,8 @@ Update Notes
 - 20.11.2025
     - Added a Fix for Recovery Point Deletion occuring when an existing Recovery Point is specified. We should only delete when we create.
     - Added logic to support UseCustomCredentialFile for Citrix (VAD) processing.
+- 12.03.2026
+    - Added logic to check for duplicate VM instances. Provide a warning and use the most recently created VM.
 
 .EXAMPLE
 See the README.md file in the same folder as this script for examples of how to use the script.
@@ -2830,10 +2832,20 @@ if ([string]::IsNullOrEmpty($AdditionalPrismCentrals)) {
 #region Learn about the Source VM
 #-------------------------------------------------------------
 $source_vm = Get-PCVM -pc $SourcePC -vmName $BaseVM -PrismCentralCredentials $PrismCentralCredentials
+#region Add an array check for duplicate instance debugging
+if ($source_vm -is [Array]) {
+    Write-Log -Message "[VM] Found multiple Source VMs: $($source_vm.name) on pc $($SourcePC)" -Level Warn
+    Foreach ($vm in $source_vm) {
+        Write-Log -Message "[VM] VM: $($vm.name) with extId $($vm.extId) on cluster $($vm.cluster.ExtId) created at $($vm.createTime)" -Level warn
+    }
+    Write-Log -Message "[VM] Using the most recently created VM" -Level Info
+    $source_vm = $source_vm | Sort-Object createTime -descending | Select-Object -First 1
+}
+#endregion Add an array check for duplicate instance debugging
 if (-not [string]::IsNullOrEmpty($source_vm)) {
-    Write-Log -Message "[VM] Found Source VM: $($source_vm.name) on pc ($SourcePC)" -Level Info
+    Write-Log -Message "[VM] Found Source VM: $($source_vm.name) on pc $($SourcePC)" -Level Info
 } else {
-    Write-Log -Message "[VM] Could not find Source VM: $($BaseVM) on pc ($SourcePC)" -Level Warn
+    Write-Log -Message "[VM] Could not find Source VM: $($BaseVM) on pc $($SourcePC)" -Level Warn
     StopIteration
     Exit 1
 }
