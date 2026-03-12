@@ -1839,7 +1839,7 @@ Function Get-PCDetails {
     process {
         Write-Log -Message "[Prism Central] Querying for Prism Central Details under the Prism Central Instance $($pc)" -Level Info
         try {
-            $pc_details = InvokePrismAPIv3 -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
+            $pc_details = Invoke-PrismAPIv4 -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
         }
         catch {
             Write-Log -Message "[Prism Central] Could not connect to Prism Central Instance: $($pc)" -Level Warn
