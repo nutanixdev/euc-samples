@@ -35,7 +35,7 @@
             "ctx_AdminAddress": "",
             "ctx_Catalogs": []
         },
-        "MultieSite": {
+        "MultiSite": {
             "ctx_SiteConfigJSON" : ""
         },
         "CitrixCloud": {
@@ -204,7 +204,7 @@
                     "Mandatory": false
                 }
             },
-            "MultieSite": {
+            "MultiSite": {
                 "ctx_SiteConfigJSON": {
                     "Type": "string",
                     "Description": "JSON input file for multi site (or single site) Citrix site configurations. Catalogs and Delivery Controllers",

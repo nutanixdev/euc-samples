@@ -96,7 +96,6 @@ Limitations and items of Note
 - The temp VM when restored will have no NIC. This is fine for MCS provisioning.
 - The script requires that all Prism Centrals have the same authentication account (if you need different accounts per PC, update the script logic)
 - The script required that all Prism Elements have the same authentication account (if you need different accounts per PE, update the script logic)
-- If you choose to use Citrix integration, this integration is currently limited to PE based plugins.
 
 Update Notes
 - 01.09.2025
@@ -111,6 +110,13 @@ Update Notes
     - Added logic to support UseCustomCredentialFile for Citrix (VAD) processing.
 - 12.03.2026
     - Added logic to check for duplicate VM instances. Provide a warning and use the most recently created VM.
+- 25.03.2026
+    - Added logic to support Native Citrix Prism Central integration and Templates
+    - Added logic to support Catalog Updates for Templates and Machine Profiles
+    - Script will only update the machine profile if the current machine profile matches the current Template. If it doesn't, it indicates that it's not safe to assume the new template is the new machine profile.
+    - Random typo and logic cleanup
+    - Added logic checks to prevent ctx_SiteConfigJSON and $IsCitrixDaaS from being used together
+    - BREAKING NOTE: When citrix release Nutanix Template Version support, this logic will need to be updated. It's currently harccodes to Initial Version.templateversion
 
 .EXAMPLE
 See the README.md file in the same folder as this script for examples of how to use the script.
@@ -746,13 +752,58 @@ Function Invoke-CVADCatalogUpdateAPI {
     }
 }
 
+Function Invoke-CVADMachineProfileUpdateAPI {
+    [CmdletBinding()]
+    param (
+        [parameter(mandatory = $true)][string]$DDC,
+        [parameter(mandatory = $true)][string]$Catalog,
+        [parameter(mandatory = $true)][string]$MachineProfile,
+        [parameter(mandatory = $true)][string]$EncodedAdminCredential
+    )
+
+    begin {
+        #----------------------------------------------------------------------------------------------------------------------------
+        # Set Headers
+        #----------------------------------------------------------------------------------------------------------------------------
+        $Headers = Get-CVADAuthHeadersAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential
+        #----------------------------------------------------------------------------------------------------------------------------
+    }
+    process {
+        #----------------------------------------------------------------------------------------------------------------------------
+        # Set API call detail
+        #----------------------------------------------------------------------------------------------------------------------------
+        $Method = "PATCH"
+        $RequestUri = "https://$($DDC)/cvad/manage/MachineCatalogs/$($Catalog)"
+        $PayloadContent = @{
+            MachineProfilePath = $MachineProfile
+        }
+        $Payload = $PayloadContent | ConvertTo-Json -Depth 4
+        $ContentType = "Application/JSON"
+        #----------------------------------------------------------------------------------------------------------------------------
+        try {
+            $update_machine_profile_task = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -Body $Payload -ContentType $ContentType -ResponseHeadersVariable "ResponseHeaders" -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+        }
+        catch {
+            Write-Log -Message $_ -Level Error
+        }
+    }
+    end {
+        if ($update_machine_profile_task.ProvisioningScheme.MachineProfile.XDPath -eq $MachineProfile) {
+            return $true
+        } else {
+            return $false
+        }
+    }
+}
+
 Function Invoke-ProcessCitrixCatalogUpdate {
     [CmdletBinding()]
     param (
         [parameter(mandatory = $true)][string]$DDC,
         [parameter(mandatory = $true)][string]$Catalog,
         [parameter(mandatory = $true)][string]$Image,
-        [parameter(mandatory = $true)][string]$EncodedAdminCredential
+        [parameter(mandatory = $true)][string]$EncodedAdminCredential,
+        [parameter(mandatory = $true)][ValidateSet("PrismElement", "PrismCentral")]$CitrixIntegrationType
     )
 
     begin {
@@ -760,13 +811,14 @@ Function Invoke-ProcessCitrixCatalogUpdate {
     }
     process {
         try {
+            Write-Log -Message "[Citrix Validation] Validating Catalog $($Catalog) exists on Delivery Controller: $($DDC)" -Level Info
             $validate_catalog_exists = Get-CVADCatalogsAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential | Where-Object { $_.Name -eq $Catalog }
             if ([string]::IsNullOrEmpty($validate_catalog_exists)) {
                 Write-Log -Message "[Citrix Validation] Failed to validate Catalog: $($Catalog) on Delivery Controller: $($DDC)" -Level Warn
                 $Global:TotalCatalogFailureCount ++
                 $Global:CurrentCatalogCount ++
             } else {
-                Write-Log -Message "[Citrix Validation] Validating Catalog $($Catalog) exists on Delivery Controller: $($DDC)" -Level Info
+                Write-Log -Message "[Citrix Validation] Catalog $($Catalog) exists on Delivery Controller: $($DDC)" -Level Info
                 if ($validate_catalog_exists.ProvisioningType -ne "MCS") {
                     Write-Log -Message "[Citrix Validation] Catalog is of provisioning type $($validate_catalog_exists.ProvisioningType) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                     $Global:TotalCatalogFailureCount ++
@@ -774,37 +826,87 @@ Function Invoke-ProcessCitrixCatalogUpdate {
                 } else {
                     Write-Log -Message "[Citrix Validation] Successfully validated Catalog: $($Catalog) on Delivery Controller: $($DDC)" -Level Info
                     $catalog_current_image = $validate_catalog_exists.ProvisioningScheme.MasterImage
-                    if ($catalog_current_image.Name -eq $Image) {
-                        Write-Log -Message "[Citrix Validation] Catalog: $($Catalog) is already using the specified image: $($Image)" -Level Info
+                    #Process based on the Citrix Integration type
+                    if ($citrix_integration_type -eq "PrismElement") {
+                        if ($catalog_current_image.Name -eq $Image) {
+                            Write-Log -Message "[Citrix Validation] Catalog: $($Catalog) is already using the specified image: $($Image)" -Level Info
+                            $Global:CurrentCatalogCount ++
+                            $Global:TotalCatalogSuccessCount ++
+                        } else {
+                            Write-Log -Message "[Citrix Validation] Catalog is using $($catalog_current_image.Name). Will be processed." -Level Info
+                            $pattern = "(?<=\\)([^\\]+)(?=\.template)"
+                            $updated_image = $catalog_current_image.XDPath -replace $pattern,$Image
+    
+                            Write-Log -Message "[Citrix Image] Current Image for Catalog: $($Catalog) is: $($catalog_current_image.XDPath)" -Level Info
+                            Write-Log -Message "[Citrix Image] New Image for Catalog: $($Catalog) will be: $($updated_image)" -Level Info
+                            # Start the update process
+                            
+                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $Catalog -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
+                        }
+                    } elseif ($citrix_integration_type -eq "PrismCentral") {
+                        $current_template_name = ($catalog_current_image.XDPath -split '\\' | Where-Object { $_ -match "\.template$" }) -replace ".template", ""
+                        $catalog_machine_profile = $validate_catalog_exists.ProvisioningScheme.MachineProfile
+                        if ($current_template_name -eq $Image) {
+                            Write-Log -Message "[Citrix Validation] Catalog: $($Catalog) is already using the specified Template: $($Image)" -Level Info
+                            $Global:CurrentCatalogCount ++
+                            $Global:TotalCatalogSuccessCount ++
+                        } else {
+                            Write-Log -Message "[Citrix Validation] Catalog is using $($current_template_name). Will be processed." -Level Info
+                            $updated_image = $catalog_current_image.XDPath -replace '(?<=\\)[^\\]+(?=\.template\\)', "$Image"
+                            Write-Log -Message "[Citrix Image] Current Template for Catalog: $($Catalog) is: $($catalog_current_image.XDPath)" -Level Info
+                            Write-Log -Message "[Citrix Image] New Template for Catalog: $($Catalog) will be: $($updated_image)" -Level Info
+
+                            if (-not [string]::IsNullOrEmpty($catalog_machine_profile)){
+                                $machine_profile_name = ($catalog_machine_profile.XDPath -split '\\' | Where-Object { $_ -match "\.template$" }) -replace ".template", ""
+                                if ($machine_profile_name -eq $current_template_name){
+                                    # this is an indication that Machine Profile matches Template. We should update accordingly
+                                    Write-Log -Message "[Citrix Machine Profile] Catalog is using machine profile: $($machine_profile_name). Will update to match new Template: $($Image)" -Level Info
+                                    $new_machine_profile = $catalog_machine_profile.XDPath -replace '(?<=\\)[^\\]+(?=\.template\\)', "$Image"
+                                    $machine_profile_update_required = $true
+                                } else {
+                                    Write-Log -Message "[Citrix Machine Profile] Catalog is using a different machine profile to template. Not Updating Machine Profile" -Level Warn
+                                    Write-Log -Message "[Citrix Machine Profile] Machine Profile: $($machine_profile_name)" -Level Info
+                                    $machine_profile_update_required = $false
+                                }
+                            } else {
+                                $machine_profile_update_required = $false
+                            }
+                            # Start the update process
+                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $Catalog -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
+                        }                        
+                    }
+
+                    ## Now go monitor for success depending on task output above
+                    if ([string]::IsNullOrEmpty($update_catalog_image_task)) {
+                        Write-Log -Message "[Citrix Catalog Update] Failed to update Catalog: $($Catalog) with new image: $($updated_image)" -Level Warn
+                        $Global:TotalCatalogFailureCount ++
                         $Global:CurrentCatalogCount ++
-                        $Global:TotalCatalogSuccessCount ++
                     } else {
-                        Write-Log -Message "[Citrix Validation] Catalog is using $($catalog_current_image.Name). Will be processed." -Level Info
-                        $pattern = "(?<=\\)([^\\]+)(?=\.template)"
-                        $updated_image = $catalog_current_image.XDPath -replace $pattern,$Image
-
-                        Write-Log -Message "[Citrix Image] Current Image for Catalog: $($Catalog) is: $($catalog_current_image.XDPath)" -Level Info
-                        Write-Log -Message "[Citrix Image] New Image for Catalog: $($Catalog) will be: $($updated_image)" -Level Info
-                        # Start the update process
-                        
-                        $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $Catalog -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
-
-                        ## Now go monitor for success depending on task output above
-                        if ([string]::IsNullOrEmpty($update_catalog_image_task)) {
+                        $cvad_job_completion = Invoke-CVADJobMonitorStatusAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential -JobID $update_catalog_image_task.id
+                        if ($cvad_job_completion -eq "Complete") {
+                            Write-Log -Message "[Citrix Catalog Update] Successfully updated Catalog: $($Catalog) with new image: $($updated_image)" -Level Info
+                            $Global:CurrentCatalogCount ++
+                            $Global:TotalCatalogSuccessCount ++
+                        } else {
                             Write-Log -Message "[Citrix Catalog Update] Failed to update Catalog: $($Catalog) with new image: $($updated_image)" -Level Warn
                             $Global:TotalCatalogFailureCount ++
                             $Global:CurrentCatalogCount ++
+                        }
+                    }
+
+                    ## Now update the machine profile if required
+                    if ($machine_profile_update_required -eq $true) {
+                        $machine_profile_updated = Invoke-CVADMachineProfileUpdateAPI -DDC $DDC -Catalog $Catalog -MachineProfile $new_machine_profile -EncodedAdminCredential $EncodedAdminCredential                        
+                        
+                        if ($machine_profile_updated -eq $true) {
+                            Write-Log -Message "[Citrix Machine Profile Update] Successfully updated Machine Profile: $($new_machine_profile)" -Level Info
+                            $Global:CurrentCatalogCount = $Global:CurrentCatalogCount
+                            $Global:TotalCatalogSuccessCount = $Global:TotalCatalogSuccessCount
                         } else {
-                            $cvad_job_completion = Invoke-CVADJobMonitorStatusAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential -JobID $update_catalog_image_task.id
-                            if ($cvad_job_completion -eq "Complete") {
-                                Write-Log -Message "[Citrix Catalog Update] Successfully updated Catalog: $($Catalog) with new image: $($updated_image)" -Level Info
-                                $Global:CurrentCatalogCount ++
-                                $Global:TotalCatalogSuccessCount ++
-                            } else {
-                                Write-Log -Message "[Citrix Catalog Update] Failed to update Catalog: $($Catalog) with new image: $($updated_image)" -Level Warn
-                                $Global:TotalCatalogFailureCount ++
-                                $Global:CurrentCatalogCount ++
-                            }
+                            Write-Log -Message "[Citrix Machine Profile Update] Failed to update Machine Profile: $($new_machine_profile)" -Level Warn
+                            $Global:TotalCatalogSuccessCount -- # decrement the success count
+                            $Global:TotalCatalogFailureCount ++
+                            $Global:CurrentCatalogCount ++
                         }
                     }
                 }
@@ -2361,6 +2463,7 @@ Function Get-PCStorageContainerList {
 # Variables
 # ============================================================================
 $RunDate = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -replace ":","-" -replace " ","-" # We want all snapshots across all clusters to have the same timestamp
+$SupportedHypervisorPlugTypes = @("AcropolisFactory", "AcropolisHypervisorPCFactory") # PE and PC Native Hypervisors
 
 #region Set variables from JSON to replace all parameters.
 #-------------------------------------------------------------
@@ -2421,7 +2524,7 @@ if ($ConfigPath){
     #------------------- Citrix Variables ---------------------------------------------------------------------------------#
     #----------------------------------------------------------------------------------------------------------------------#
     $IsCitrixDaaS                       = $master_config.CitrixParams.CitrixCloud.IsCitrixDaaS
-    if (-not $master_config.CitrixParams.MultieSite.ctx_SiteConfigJSON) { 
+    if (-not $master_config.CitrixParams.MultiSite.ctx_SiteConfigJSON) { 
         # Not a multi-site JSON based configuration, use  single site parameters
         if (-not $IsCitrixDaaS) { 
             # Not a DaaS environment, use the single site parameters
@@ -2443,7 +2546,7 @@ if ($ConfigPath){
         $ctx_AdminAddress               = $master_config.CitrixParams.SingleSite.ctx_AdminAddress
     } else { 
         # A multi-site JSON based configuration, use the ctx_SiteConfigJSON parameter
-        $ctx_SiteConfigJSON             = $master_config.CitrixParams.MultieSite.ctx_SiteConfigJSON
+        $ctx_SiteConfigJSON             = $master_config.CitrixParams.MultiSite.ctx_SiteConfigJSON
     }
     $DomainUser                         = $master_config.CitrixParams.DomainUser
     $DomainPassword                     = $master_config.CitrixParams.DomainPassword
@@ -2499,6 +2602,9 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     # If Citrix Processing. If not Citrix DaaS
     if (-not $IsCitrixDaaS -and (-not ($ctx_SiteConfigJSON))) {
         if ([string]::IsNullOrEmpty($ctx_AdminAddress)) { Write-Log -Message "[PARAM VALIDATION] DDC is required for Citrix CVAD" -Level Error; Exit 1 }
+    }
+    if ($IsCitrixDaaS -and $ctx_SiteConfigJSON) {
+        Write-Log -Message "[PARAM VALIDATION] Citrix DaaS and SiteConfigJSON are both specified. You cannot use ctx_SiteConfigJSON with Citrix DaaS" -Level Error; Exit 1
     }
     # If CitrixDaaS, Must have CustomerID, ClientID, ClientSecret, and Region
     if ($IsCitrixDaaS) {
@@ -2680,12 +2786,13 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
                     Write-Log -Message "[Citrix Validation] Catalog is of provisioning type $($validate_catalog_exists.ProvisioningType) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                     $Global:TotalCatalogFailureCount += 1
                 } else {
-                    if ($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName -eq "AcropolisFactory") {
+                    $HypervisorPluginType = $validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName
+                    if ($HypervisorPluginType -in $SupportedHypervisorPlugTypes) {
                         Write-Log -Message "[Citrix Validation] Successfully validated Catalog: $($Catalog) on Delivery Controller: $($DDC)." -Level Info
-                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName)" -Level Info
+                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($HypervisorPluginType)" -Level Info
                         $Global:TotalCatalogSuccessCount ++
                     } else {
-                        Write-Log -Message "[Citrix Validation] Catalog is not of type Acropolis and cannot be used on Delivery Controller: $($DDC)" -Level Warn
+                        Write-Log -Message "[Citrix Validation] Catalog is using a hypervisor plugin type that is not supported ($($HypervisorPluginType)) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                         $Global:TotalCatalogFailureCount += 1
                     } 
                 }
@@ -2722,12 +2829,13 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
                     Write-Log -Message "[Citrix Validation] Catalog is of provisioning type $($validate_catalog_exists.ProvisioningType) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                     $Global:TotalCatalogFailureCount += 1
                 } else {
-                    if ($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName -eq "AcropolisFactory") {
+                    $HypervisorPluginType = $validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName
+                    if ($HypervisorPluginType -in $SupportedHypervisorPlugTypes) {
                         Write-Log -Message "[Citrix Validation] Successfully validated Catalog: $($Catalog) on Delivery Controller: $($DDC)." -Level Info
-                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName)" -Level Info
+                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($HypervisorPluginType)" -Level Info
                         $Global:TotalCatalogSuccessCount ++
                     } else {
-                        Write-Log -Message "[Citrix Validation] Catalog is not of type Acropolis and cannot be used on Delivery Controller: $($DDC)" -Level Warn
+                        Write-Log -Message "[Citrix Validation] Catalog is using a hypervisor plugin type that is not supported ($($HypervisorPluginType)) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                         $Global:TotalCatalogFailureCount += 1
                     }                    
                 }
@@ -2737,6 +2845,25 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     }
 
     Write-Log -Message "[Citrix Validation] Successfully validated $($TotalCatalogSuccessCount) Catalogs" -Level Info
+
+    # Now check to ensure that only one type of hypervisor plugin type is used - we can't handle multiple types
+    $HypervisorPluginTypes = $Catalogs | ForEach-Object { $_.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName }
+    $UniqueHypervisorPluginTypes = $HypervisorPluginTypes | Sort-Object -Unique
+    if ($UniqueHypervisorPluginTypes.Count -gt 1) {
+        Write-Log -Message "[Citrix Validation] Multiple hypervisor plugin types are used across the Catalogs: $($UniqueHypervisorPluginTypes). This is unsupported." -Level Warn
+        StopIteration
+        Exit 1
+    }
+
+    # Now set a citrix environment type for future processing based on the hypervisor type
+    if ($UniqueHypervisorPluginTypes -eq "AcropolisFactory") {
+        $citrix_integration_type = "PrismElement"
+    } else {
+        $citrix_integration_type = "PrismCentral"
+    }
+
+    Write-Log -Message "[Citrix Validation] Citrix Integration type used for this environment: $($citrix_integration_type)" -Level Info
+
     if ($TotalCatalogFailureCount -gt 0) {
         Write-Log -Message "[Citrix Validation] Failed to validate $($TotalCatalogFailureCount) Catalogs" -Level Warn
         StopIteration
@@ -3897,23 +4024,38 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
             $Catalog = $_.Catalog
             $DDC = $_.Controller
 
-            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $pe_snapshot_name -EncodedAdminCredential $EncodedAdminCredential
+            if ($citrix_integration_type -eq "PrismElement") {
+                $image_for_update = $pe_snapshot_name
+            } elseif ($citrix_integration_type -eq "PrismCentral") {
+                $image_for_update = $pc_template_name
+            }
+
+            #NEED TO ADD A CHECK HERE THAT WE CAN ACTUALLY FIND THE TEMPLATE FOREACH CATALOG BEFORE PROCESSING.
+
+            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $image_for_update -EncodedAdminCredential $EncodedAdminCredential -CitrixIntegrationType $citrix_integration_type
         }
     }
     else {
         #NO JSON
         $Catalogs = $ctx_Catalogs # This was set in the validation phase, but resetting here for ease of reading
-        $DDC = $ctx_AdminAddress # This was set in the validation phase, but resetting here for ease of reading
         $CatalogCount = $Catalogs.Count
 
         Write-Log -Message "[Citrix Catalog] There are $($CatalogCount) Catalogs to Process" -Level Info
         foreach ($Catalog in $Catalogs) {
-            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $pe_snapshot_name -EncodedAdminCredential $EncodedAdminCredential
+            if ($citrix_integration_type -eq "PrismElement") {
+                $image_for_update = $pe_snapshot_name
+            } elseif ($citrix_integration_type -eq "PrismCentral") {
+                $image_for_update = $pc_template_name
+            }
+
+            #NEED TO ADD A CHECK HERE THAT WE CAN ACTUALLY FIND THE TEMPLATE FOREACH CATALOG BEFORE PROCESSING.
+            
+            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $image_for_update -EncodedAdminCredential $EncodedAdminCredential -CitrixIntegrationType $citrix_integration_type
         }
     }
     Write-Log -Message "[Citrix Catalog] Successfully processed $($TotalCatalogSuccessCount) Catalogs" -Level Info
     if ($TotalCatalogFailureCount -gt 0) {
-        Write-Log "[Citrix Catalog] Failed to processed $($TotalCatalogFailureCount) Catalogs" -Level Warn
+        Write-Log "[Citrix Catalog] Failed to process $($TotalCatalogFailureCount) Catalogs" -Level Warn
     }
 }
 #endregion Process Citrix Environment
