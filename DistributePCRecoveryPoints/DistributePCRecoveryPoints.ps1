@@ -841,7 +841,7 @@ Function Invoke-ProcessCitrixCatalogUpdate {
                             Write-Log -Message "[Citrix Image] New Image for Catalog: $($Catalog) will be: $($updated_image)" -Level Info
                             # Start the update process
                             
-                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $Catalog -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
+                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $validate_catalog_exists.Id -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
                         }
                     } elseif ($citrix_integration_type -eq "PrismCentral") {
                         $current_template_name = ($catalog_current_image.XDPath -split '\\' | Where-Object { $_ -match "\.template$" }) -replace ".template", ""
@@ -872,7 +872,7 @@ Function Invoke-ProcessCitrixCatalogUpdate {
                                 $machine_profile_update_required = $false
                             }
                             # Start the update process
-                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $Catalog -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
+                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $validate_catalog_exists.Id -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
                         }                        
                     }
 
@@ -887,27 +887,27 @@ Function Invoke-ProcessCitrixCatalogUpdate {
                             Write-Log -Message "[Citrix Catalog Update] Successfully updated Catalog: $($Catalog) with new image: $($updated_image)" -Level Info
                             $Global:CurrentCatalogCount ++
                             $Global:TotalCatalogSuccessCount ++
+                            $image_update_succeeded = $true
                         } else {
                             Write-Log -Message "[Citrix Catalog Update] Failed to update Catalog: $($Catalog) with new image: $($updated_image)" -Level Warn
                             $Global:TotalCatalogFailureCount ++
                             $Global:CurrentCatalogCount ++
+                            $image_update_succeeded = $false
                         }
                     }
 
                     ## Now update the machine profile if required
-                    if ($machine_profile_update_required -eq $true) {
-                        $machine_profile_updated = Invoke-CVADMachineProfileUpdateAPI -DDC $DDC -Catalog $Catalog -MachineProfile $new_machine_profile -EncodedAdminCredential $EncodedAdminCredential                        
-                        
+                    if ($machine_profile_update_required -eq $true -and $image_update_succeeded -eq $true) {
+                        $machine_profile_updated = Invoke-CVADMachineProfileUpdateAPI -DDC $DDC -Catalog $validate_catalog_exists.Id -MachineProfile $new_machine_profile -EncodedAdminCredential $EncodedAdminCredential
                         if ($machine_profile_updated -eq $true) {
                             Write-Log -Message "[Citrix Machine Profile Update] Successfully updated Machine Profile: $($new_machine_profile)" -Level Info
-                            $Global:CurrentCatalogCount = $Global:CurrentCatalogCount
-                            $Global:TotalCatalogSuccessCount = $Global:TotalCatalogSuccessCount
                         } else {
                             Write-Log -Message "[Citrix Machine Profile Update] Failed to update Machine Profile: $($new_machine_profile)" -Level Warn
-                            $Global:TotalCatalogSuccessCount -- # decrement the success count
+                            $Global:TotalCatalogSuccessCount --
                             $Global:TotalCatalogFailureCount ++
-                            $Global:CurrentCatalogCount ++
                         }
+                    } elseif ($machine_profile_update_required -eq $true) {
+                        Write-Log -Message "[Citrix Machine Profile Update] Skipping machine profile update because image update did not succeed" -Level Warn
                     }
                 }
             }
@@ -944,50 +944,53 @@ Function Invoke-CVADJobMonitorStatusAPI {
         #----------------------------------------------------------------------------------------------------------------------------
         try {
             $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential -ErrorAction Stop
-
             if (-not $HasSubJobs) {
-                # This is a single job with no sub jobs
+                $target_job_status_result = $null
                 while ($target_job_status.Status -ne "Complete") {
                     if ($target_job_status.Status -eq "Failed") {
                         Write-Log -Message "Job Status is $($target_job_status.Status) with Error: $($target_job_status.ErrorString)" -Level Error
                         $target_job_status_result = "Failure"
-                        Break #Replace with Exit 1
+                        Break
                     }
                     Write-Log -Message "Job Status is $($target_job_status.Status) and is $($target_job_status.OverallProgressPercent) percent complete" -Level Info
                     Start-Sleep 30
-    
                     $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $target_job_status.id -EncodedAdminCredential $EncodedAdminCredential
                 }
-                $target_job_status_result = "Complete"
+                if ($null -eq $target_job_status_result) { $target_job_status_result = "Complete" }
             }
             else {
                 # This job has subjobs
                 $completed_jobs = @() #open the array to capture completed jobs
-                while ($target_job_status.status -ne "Complete") {
+                $target_job_status_result = $null #set the result to null to start
+                $stop_polling = $false #set the stop polling to false to start
+                while (-not $stop_polling -and $target_job_status.status -ne "Complete") {
                     foreach ($subjob in $target_job_status.SubJobs) {
+                        if ($subjob.Status -eq "Failed") {
+                            Write-Log -Message "Job $($subjob.parameters.value) is Failed" -Level Error
+                            $target_job_status_result = "Failure"
+                            $stop_polling = $true
+                            break
+                        }
                         if ($subjob.Status -ne "Complete") {
-                            if ($subjob.Status -eq "Failed") {
-                                Write-Log -Message "Job $($subjob.parameters.value) is Failed" -Level Warn
-                                $target_job_status_result = "Failure"
-                                Break #Replace with Exit 1
-                            }
                             Write-Log -Message "Job $($subjob.parameters.value) is $($subjob.Status)" -Level Info
                             Start-Sleep 10
                         }
-                        elseif ($subjob.Status -eq "Complete" -and $subjob.parameters.value -notin $completed_jobs) {
+                        elseif ($subjob.parameters.value -notin $completed_jobs) {
                             Write-Log -Message "Job $($subjob.parameters.value) is complete" -Level Info
                             $completed_jobs += $subjob.parameters.value
                         }
-            
                         try {
                             $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
                         }
                         catch {
                             Write-Log -Message $_ -Level Error
+                            $target_job_status_result = "Failure"
+                            $stop_polling = $true
+                            break
                         }
                     }
                 }
-                $target_job_status_result = "Complete"
+                if ($null -eq $target_job_status_result) { $target_job_status_result = "Complete" }
             }
         }
         catch {
@@ -3988,19 +3991,6 @@ if ($OutputType -eq "PE-Snapshot") {
 }
 #endregion Process each PC
 
-Write-Log -Message "[Data] ---------------- Results Outputs ----------------" -Level Info
-Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_prism_centrals) Prism Centrals" -Level Info
-Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_prism_centrals) Prism Centrals" -Level Info
-if ($OutputType -eq "PE-Snapshot") {
-    Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_clusters) Clusters" -Level Info
-    Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_clusters) Clusters" -Level Info
-    Write-Log -Message "[Data] Successfully processed $($reporting_total_processed_clusters) Clusters without error" -Level Info
-    if ($reporting_total_failed_clusters -gt 0) {
-        Write-Log -Message "[Data] Failed to process $($reporting_total_failed_clusters) Clusters" -Level Warn
-    }
-}
-Write-Log -Message "[Data] Encountered $($total_error_count) errors. Please review log file $($LogPath) for failures" -Level Info
-
 #region Process Citrix Environment
 #-------------------------------------------------------------
 if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
@@ -4030,8 +4020,6 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
                 $image_for_update = $pc_template_name
             }
 
-            #NEED TO ADD A CHECK HERE THAT WE CAN ACTUALLY FIND THE TEMPLATE FOREACH CATALOG BEFORE PROCESSING.
-
             Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $image_for_update -EncodedAdminCredential $EncodedAdminCredential -CitrixIntegrationType $citrix_integration_type
         }
     }
@@ -4059,6 +4047,22 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     }
 }
 #endregion Process Citrix Environment
+
+#region Results Outputs
+#------------------------------------------------------------
+Write-Log -Message "[Data] ---------------- Results Outputs ----------------" -Level Info
+Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_prism_centrals) Prism Centrals" -Level Info
+Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_prism_centrals) Prism Centrals" -Level Info
+if ($OutputType -eq "PE-Snapshot") {
+    Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_clusters) Clusters" -Level Info
+    Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_clusters) Clusters" -Level Info
+    Write-Log -Message "[Data] Successfully processed $($reporting_total_processed_clusters) Clusters without error" -Level Info
+    if ($reporting_total_failed_clusters -gt 0) {
+        Write-Log -Message "[Data] Failed to process $($reporting_total_failed_clusters) Clusters" -Level Warn
+    }
+}
+Write-Log -Message "[Data] Encountered $($total_error_count) errors. Please review log file $($LogPath) for failures" -Level Info
+#endregion Results Outputs
 
 #endregion Execute
 
