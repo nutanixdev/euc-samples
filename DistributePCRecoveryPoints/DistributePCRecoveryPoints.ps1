@@ -741,7 +741,20 @@ Function Invoke-CVADCatalogUpdateAPI {
         $ContentType = "Application/JSON"
         #----------------------------------------------------------------------------------------------------------------------------
         try {
-            $update_catalog_image_task = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -Body $Payload -ContentType $ContentType -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+            $update_catalog_image_task = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -Body $Payload -ContentType $ContentType -ResponseHeadersVariable "ResponseHeaders" -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+
+            # Some CVAD/DaaS responses return 202 Accepted with no body and the job id only in the Location header.
+            # Synthesize a minimal object with .id so downstream Invoke-CVADJobMonitorStatusAPI -JobID still works.
+            if ([string]::IsNullOrEmpty([string]$update_catalog_image_task.id) -and $null -ne $ResponseHeaders -and $ResponseHeaders.ContainsKey("Location")) {
+                $locationValue = @($ResponseHeaders["Location"])[0]
+                if (-not [string]::IsNullOrEmpty($locationValue)) {
+                    $jobIdFromLocation = ($locationValue -split '/')[-1]
+                    if (-not [string]::IsNullOrEmpty($jobIdFromLocation)) {
+                        Write-Log -Message "[Citrix Catalog Update] Job id not present in response body; using Location header job id: $($jobIdFromLocation)" -Level Info
+                        $update_catalog_image_task = [PSCustomObject]@{ id = $jobIdFromLocation }
+                    }
+                }
+            }
         }
         catch {
             Write-Log -Message $_ -Level Error
@@ -942,28 +955,71 @@ Function Invoke-CVADJobMonitorStatusAPI {
         #----------------------------------------------------------------------------------------------------------------------------
         # Get Job Status
         #----------------------------------------------------------------------------------------------------------------------------
+        # Common transient-failure handling: a single transient HTTP/socket blip from
+        # Get-CVADJobDetailsAPI must not cause us to lose track of a running job. We
+        # always re-poll using the original $JobID parameter (never $target_job_status.id)
+        # and treat a $null response as transient up to a small bounded count.
+        $max_consecutive_nulls = 5
+        $consecutive_nulls = 0
+        $target_job_status_result = $null
         try {
-            $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential -ErrorAction Stop
             if (-not $HasSubJobs) {
-                $target_job_status_result = $null
-                while ($target_job_status.Status -ne "Complete") {
+                while ($true) {
+                    $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+
+                    if ($null -eq $target_job_status) {
+                        $consecutive_nulls++
+                        if ($consecutive_nulls -ge $max_consecutive_nulls) {
+                            Write-Log -Message "Job $($JobID) status unreachable after $($max_consecutive_nulls) consecutive attempts. Marking as Failure." -Level Error
+                            $target_job_status_result = "Failure"
+                            break
+                        }
+                        Write-Log -Message "Job $($JobID) status query returned no data (attempt $($consecutive_nulls)/$($max_consecutive_nulls)). Retrying." -Level Warn
+                        Start-Sleep -Seconds 15
+                        continue
+                    }
+                    $consecutive_nulls = 0
+
+                    if ($target_job_status.Status -eq "Complete") {
+                        $target_job_status_result = "Complete"
+                        break
+                    }
                     if ($target_job_status.Status -eq "Failed") {
                         Write-Log -Message "Job Status is $($target_job_status.Status) with Error: $($target_job_status.ErrorString)" -Level Error
                         $target_job_status_result = "Failure"
-                        Break
+                        break
                     }
+
                     Write-Log -Message "Job Status is $($target_job_status.Status) and is $($target_job_status.OverallProgressPercent) percent complete" -Level Info
                     Start-Sleep 30
-                    $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $target_job_status.id -EncodedAdminCredential $EncodedAdminCredential
                 }
-                if ($null -eq $target_job_status_result) { $target_job_status_result = "Complete" }
             }
             else {
-                # This job has subjobs
-                $completed_jobs = @() #open the array to capture completed jobs
-                $target_job_status_result = $null #set the result to null to start
-                $stop_polling = $false #set the stop polling to false to start
-                while (-not $stop_polling -and $target_job_status.status -ne "Complete") {
+                # This job has subjobs.
+                $completed_jobs = @()
+                $stop_polling = $false
+                $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+
+                while (-not $stop_polling) {
+                    if ($null -eq $target_job_status) {
+                        $consecutive_nulls++
+                        if ($consecutive_nulls -ge $max_consecutive_nulls) {
+                            Write-Log -Message "Job $($JobID) status unreachable after $($max_consecutive_nulls) consecutive attempts. Marking as Failure." -Level Error
+                            $target_job_status_result = "Failure"
+                            break
+                        }
+                        Write-Log -Message "Job $($JobID) status query returned no data (attempt $($consecutive_nulls)/$($max_consecutive_nulls)). Retrying." -Level Warn
+                        Start-Sleep -Seconds 15
+                        $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+                        continue
+                    }
+                    $consecutive_nulls = 0
+
+                    if ($target_job_status.status -eq "Complete") {
+                        $target_job_status_result = "Complete"
+                        break
+                    }
+
                     foreach ($subjob in $target_job_status.SubJobs) {
                         if ($subjob.Status -eq "Failed") {
                             Write-Log -Message "Job $($subjob.parameters.value) is Failed" -Level Error
@@ -979,13 +1035,9 @@ Function Invoke-CVADJobMonitorStatusAPI {
                             Write-Log -Message "Job $($subjob.parameters.value) is complete" -Level Info
                             $completed_jobs += $subjob.parameters.value
                         }
-                        try {
-                            $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
-                        }
-                        catch {
-                            Write-Log -Message $_ -Level Error
-                            $target_job_status_result = "Failure"
-                            $stop_polling = $true
+                        $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+                        if ($null -eq $target_job_status) {
+                            # Bail out of the foreach so the outer while can apply the null-retry policy.
                             break
                         }
                     }
@@ -1027,12 +1079,59 @@ function Get-CVADJobDetailsAPI {
         #----------------------------------------------------------------------------------------------------------------------------
         $Method = "Get"
         $RequestUri = "https://$DDC/cvad/manage/Jobs/$($JobID)"
-        #----------------------------------------------------------------------------------------------------------------------------
-        try {
-            $job = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
-        }
-        catch {
-            Write-Log -Message $_ -Level Error
+        # Bounded retry on transient HTTP/socket failures (e.g. WSANO_DATA, connection reset, 5xx, 429).
+        # Non-transient errors (4xx other than 429) are rethrown so callers can fail fast.
+        $maxAttempts = 5
+        $attempt = 0
+        $job = $null
+        while ($attempt -lt $maxAttempts) {
+            $attempt++
+            try {
+                $job = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+                break
+            }
+            catch {
+                $isTransient = $false
+                $statusCode = $null
+                try {
+                    if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                        $statusCode = [int]$_.Exception.Response.StatusCode
+                    }
+                } catch { }
+
+                # Walk the inner exception chain for socket/IO indicators (WSANO_DATA / 11004 lives here).
+                $ex = $_.Exception
+                while ($ex) {
+                    if ($ex -is [System.Net.Sockets.SocketException] -or $ex -is [System.IO.IOException]) {
+                        $isTransient = $true
+                        break
+                    }
+                    $ex = $ex.InnerException
+                }
+                if (-not $isTransient -and $_.Exception -is [System.Net.Http.HttpRequestException] -and $null -eq $_.Exception.Response) {
+                    $isTransient = $true
+                }
+                if (-not $isTransient -and $null -ne $statusCode) {
+                    if ($statusCode -eq 429 -or ($statusCode -ge 500 -and $statusCode -lt 600)) {
+                        $isTransient = $true
+                    }
+                }
+
+                if (-not $isTransient) {
+                    Write-Log -Message "[CVAD Jobs] Non-transient error fetching Job $($JobID): $_" -Level Error
+                    throw
+                }
+
+                if ($attempt -ge $maxAttempts) {
+                    Write-Log -Message "[CVAD Jobs] Transient error fetching Job $($JobID) after $($maxAttempts) attempts. Giving up. Last error: $($_.Exception.Message)" -Level Error
+                    $job = $null
+                    break
+                }
+
+                $delay = 5 * $attempt
+                Write-Log -Message "[CVAD Jobs] Transient error fetching Job $($JobID) (attempt $($attempt)/$($maxAttempts)): $($_.Exception.Message). Retrying in $($delay)s." -Level Warn
+                Start-Sleep -Seconds $delay
+            }
         }
     }
     end {
@@ -4035,8 +4134,6 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
             } elseif ($citrix_integration_type -eq "PrismCentral") {
                 $image_for_update = $pc_template_name
             }
-
-            #NEED TO ADD A CHECK HERE THAT WE CAN ACTUALLY FIND THE TEMPLATE FOREACH CATALOG BEFORE PROCESSING.
             
             Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $image_for_update -EncodedAdminCredential $EncodedAdminCredential -CitrixIntegrationType $citrix_integration_type
         }
