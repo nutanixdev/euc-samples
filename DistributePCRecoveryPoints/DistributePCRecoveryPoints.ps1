@@ -467,15 +467,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-WebRequest $tokenUrl -Method POST -Body $Body -UseBasicParsing -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             $AccessToken = $Response.Content | ConvertFrom-Json
 
             if ([string]::IsNullOrEmpty($AccessToken)) {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             #--------------------------------------------
@@ -492,15 +492,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-RestMethod -Uri $RequestUri -Method GET -Headers $Headers -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             $SiteID = $Response.Customers.Sites.Id
 
             if ([String]::IsNullOrEmpty($SiteID)) {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             #--------------------------------------------
@@ -528,15 +528,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-WebRequest -Uri $TokenURL -Method Post -Headers $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             $AccessToken = $Response.Content | ConvertFrom-Json
 
             if ([string]::IsNullOrEmpty($AccessToken)) {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             #--------------------------------------------
@@ -553,15 +553,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-WebRequest -Uri $URL -Method Get -Header $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             $SiteID = $Response.Content | ConvertFrom-Json
 
             if ([String]::IsNullOrEmpty($SiteID)) {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             #--------------------------------------------
