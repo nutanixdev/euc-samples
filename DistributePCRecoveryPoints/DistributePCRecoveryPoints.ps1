@@ -96,7 +96,6 @@ Limitations and items of Note
 - The temp VM when restored will have no NIC. This is fine for MCS provisioning.
 - The script requires that all Prism Centrals have the same authentication account (if you need different accounts per PC, update the script logic)
 - The script required that all Prism Elements have the same authentication account (if you need different accounts per PE, update the script logic)
-- If you choose to use Citrix integration, this integration is currently limited to PE based plugins.
 
 Update Notes
 - 01.09.2025
@@ -109,6 +108,15 @@ Update Notes
 - 20.11.2025
     - Added a Fix for Recovery Point Deletion occuring when an existing Recovery Point is specified. We should only delete when we create.
     - Added logic to support UseCustomCredentialFile for Citrix (VAD) processing.
+- 12.03.2026
+    - Added logic to check for duplicate VM instances. Provide a warning and use the most recently created VM.
+- 25.03.2026
+    - Added logic to support Native Citrix Prism Central integration and Templates
+    - Added logic to support Catalog Updates for Templates and Machine Profiles
+    - Script will only update the machine profile if the current machine profile matches the current Template. If it doesn't, it indicates that it's not safe to assume the new template is the new machine profile.
+    - Random typo and logic cleanup
+    - Added logic checks to prevent ctx_SiteConfigJSON and $IsCitrixDaaS from being used together
+    - BREAKING NOTE: When citrix release Nutanix Template Version support, this logic will need to be updated. It's currently harccodes to Initial Version.templateversion
 
 .EXAMPLE
 See the README.md file in the same folder as this script for examples of how to use the script.
@@ -459,15 +467,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-WebRequest $tokenUrl -Method POST -Body $Body -UseBasicParsing -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             $AccessToken = $Response.Content | ConvertFrom-Json
 
             if ([string]::IsNullOrEmpty($AccessToken)) {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             #--------------------------------------------
@@ -484,15 +492,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-RestMethod -Uri $RequestUri -Method GET -Headers $Headers -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             $SiteID = $Response.Customers.Sites.Id
 
             if ([String]::IsNullOrEmpty($SiteID)) {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             #--------------------------------------------
@@ -520,15 +528,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-WebRequest -Uri $TokenURL -Method Post -Headers $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             $AccessToken = $Response.Content | ConvertFrom-Json
 
             if ([string]::IsNullOrEmpty($AccessToken)) {
-                Write-Log -Message "Failed to return token. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return token" -Level Error
+                Break
             }
 
             #--------------------------------------------
@@ -545,15 +553,15 @@ function Get-CVADAuthHeadersAPI {
                 $Response = Invoke-WebRequest -Uri $URL -Method Get -Header $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             $SiteID = $Response.Content | ConvertFrom-Json
 
             if ([String]::IsNullOrEmpty($SiteID)) {
-                Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
-                Break #Replace with Exit 1
+                Write-Log -Message "Failed to return Site ID" -Level Error
+                Break
             }
 
             #--------------------------------------------
@@ -733,7 +741,20 @@ Function Invoke-CVADCatalogUpdateAPI {
         $ContentType = "Application/JSON"
         #----------------------------------------------------------------------------------------------------------------------------
         try {
-            $update_catalog_image_task = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -Body $Payload -ContentType $ContentType -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+            $update_catalog_image_task = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -Body $Payload -ContentType $ContentType -ResponseHeadersVariable "ResponseHeaders" -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+
+            # Some CVAD/DaaS responses return 202 Accepted with no body and the job id only in the Location header.
+            # Synthesize a minimal object with .id so downstream Invoke-CVADJobMonitorStatusAPI -JobID still works.
+            if ([string]::IsNullOrEmpty([string]$update_catalog_image_task.id) -and $null -ne $ResponseHeaders -and $ResponseHeaders.ContainsKey("Location")) {
+                $locationValue = @($ResponseHeaders["Location"])[0]
+                if (-not [string]::IsNullOrEmpty($locationValue)) {
+                    $jobIdFromLocation = ($locationValue -split '/')[-1]
+                    if (-not [string]::IsNullOrEmpty($jobIdFromLocation)) {
+                        Write-Log -Message "[Citrix Catalog Update] Job id not present in response body; using Location header job id: $($jobIdFromLocation)" -Level Info
+                        $update_catalog_image_task = [PSCustomObject]@{ id = $jobIdFromLocation }
+                    }
+                }
+            }
         }
         catch {
             Write-Log -Message $_ -Level Error
@@ -744,13 +765,58 @@ Function Invoke-CVADCatalogUpdateAPI {
     }
 }
 
+Function Invoke-CVADMachineProfileUpdateAPI {
+    [CmdletBinding()]
+    param (
+        [parameter(mandatory = $true)][string]$DDC,
+        [parameter(mandatory = $true)][string]$Catalog,
+        [parameter(mandatory = $true)][string]$MachineProfile,
+        [parameter(mandatory = $true)][string]$EncodedAdminCredential
+    )
+
+    begin {
+        #----------------------------------------------------------------------------------------------------------------------------
+        # Set Headers
+        #----------------------------------------------------------------------------------------------------------------------------
+        $Headers = Get-CVADAuthHeadersAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential
+        #----------------------------------------------------------------------------------------------------------------------------
+    }
+    process {
+        #----------------------------------------------------------------------------------------------------------------------------
+        # Set API call detail
+        #----------------------------------------------------------------------------------------------------------------------------
+        $Method = "PATCH"
+        $RequestUri = "https://$($DDC)/cvad/manage/MachineCatalogs/$($Catalog)"
+        $PayloadContent = @{
+            MachineProfilePath = $MachineProfile
+        }
+        $Payload = $PayloadContent | ConvertTo-Json -Depth 4
+        $ContentType = "Application/JSON"
+        #----------------------------------------------------------------------------------------------------------------------------
+        try {
+            $update_machine_profile_task = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -Body $Payload -ContentType $ContentType -ResponseHeadersVariable "ResponseHeaders" -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+        }
+        catch {
+            Write-Log -Message $_ -Level Error
+        }
+    }
+    end {
+        if ($update_machine_profile_task.ProvisioningScheme.MachineProfile.XDPath -eq $MachineProfile) {
+            return $true
+        } else {
+            return $false
+        }
+    }
+}
+
 Function Invoke-ProcessCitrixCatalogUpdate {
     [CmdletBinding()]
     param (
         [parameter(mandatory = $true)][string]$DDC,
         [parameter(mandatory = $true)][string]$Catalog,
         [parameter(mandatory = $true)][string]$Image,
-        [parameter(mandatory = $true)][string]$EncodedAdminCredential
+        [parameter(mandatory = $true)][string]$EncodedAdminCredential,
+        [parameter(mandatory = $true)][ValidateSet("PrismElement", "PrismCentral")]$CitrixIntegrationType
     )
 
     begin {
@@ -758,13 +824,14 @@ Function Invoke-ProcessCitrixCatalogUpdate {
     }
     process {
         try {
+            Write-Log -Message "[Citrix Validation] Validating Catalog $($Catalog) exists on Delivery Controller: $($DDC)" -Level Info
             $validate_catalog_exists = Get-CVADCatalogsAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential | Where-Object { $_.Name -eq $Catalog }
             if ([string]::IsNullOrEmpty($validate_catalog_exists)) {
                 Write-Log -Message "[Citrix Validation] Failed to validate Catalog: $($Catalog) on Delivery Controller: $($DDC)" -Level Warn
                 $Global:TotalCatalogFailureCount ++
                 $Global:CurrentCatalogCount ++
             } else {
-                Write-Log -Message "[Citrix Validation] Validating Catalog $($Catalog) exists on Delivery Controller: $($DDC)" -Level Info
+                Write-Log -Message "[Citrix Validation] Catalog $($Catalog) exists on Delivery Controller: $($DDC)" -Level Info
                 if ($validate_catalog_exists.ProvisioningType -ne "MCS") {
                     Write-Log -Message "[Citrix Validation] Catalog is of provisioning type $($validate_catalog_exists.ProvisioningType) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                     $Global:TotalCatalogFailureCount ++
@@ -772,38 +839,88 @@ Function Invoke-ProcessCitrixCatalogUpdate {
                 } else {
                     Write-Log -Message "[Citrix Validation] Successfully validated Catalog: $($Catalog) on Delivery Controller: $($DDC)" -Level Info
                     $catalog_current_image = $validate_catalog_exists.ProvisioningScheme.MasterImage
-                    if ($catalog_current_image.Name -eq $Image) {
-                        Write-Log -Message "[Citrix Validation] Catalog: $($Catalog) is already using the specified image: $($Image)" -Level Info
+                    #Process based on the Citrix Integration type
+                    if ($citrix_integration_type -eq "PrismElement") {
+                        if ($catalog_current_image.Name -eq $Image) {
+                            Write-Log -Message "[Citrix Validation] Catalog: $($Catalog) is already using the specified image: $($Image)" -Level Info
+                            $Global:CurrentCatalogCount ++
+                            $Global:TotalCatalogSuccessCount ++
+                        } else {
+                            Write-Log -Message "[Citrix Validation] Catalog is using $($catalog_current_image.Name). Will be processed." -Level Info
+                            $pattern = "(?<=\\)([^\\]+)(?=\.template)"
+                            $updated_image = $catalog_current_image.XDPath -replace $pattern,$Image
+    
+                            Write-Log -Message "[Citrix Image] Current Image for Catalog: $($Catalog) is: $($catalog_current_image.XDPath)" -Level Info
+                            Write-Log -Message "[Citrix Image] New Image for Catalog: $($Catalog) will be: $($updated_image)" -Level Info
+                            # Start the update process
+                            
+                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $validate_catalog_exists.Id -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
+                        }
+                    } elseif ($citrix_integration_type -eq "PrismCentral") {
+                        $current_template_name = ($catalog_current_image.XDPath -split '\\' | Where-Object { $_ -match "\.template$" }) -replace ".template", ""
+                        $catalog_machine_profile = $validate_catalog_exists.ProvisioningScheme.MachineProfile
+                        if ($current_template_name -eq $Image) {
+                            Write-Log -Message "[Citrix Validation] Catalog: $($Catalog) is already using the specified Template: $($Image)" -Level Info
+                            $Global:CurrentCatalogCount ++
+                            $Global:TotalCatalogSuccessCount ++
+                        } else {
+                            Write-Log -Message "[Citrix Validation] Catalog is using $($current_template_name). Will be processed." -Level Info
+                            $updated_image = $catalog_current_image.XDPath -replace '(?<=\\)[^\\]+(?=\.template\\)', "$Image"
+                            Write-Log -Message "[Citrix Image] Current Template for Catalog: $($Catalog) is: $($catalog_current_image.XDPath)" -Level Info
+                            Write-Log -Message "[Citrix Image] New Template for Catalog: $($Catalog) will be: $($updated_image)" -Level Info
+
+                            if (-not [string]::IsNullOrEmpty($catalog_machine_profile)){
+                                $machine_profile_name = ($catalog_machine_profile.XDPath -split '\\' | Where-Object { $_ -match "\.template$" }) -replace ".template", ""
+                                if ($machine_profile_name -eq $current_template_name){
+                                    # this is an indication that Machine Profile matches Template. We should update accordingly
+                                    Write-Log -Message "[Citrix Machine Profile] Catalog is using machine profile: $($machine_profile_name). Will update to match new Template: $($Image)" -Level Info
+                                    $new_machine_profile = $catalog_machine_profile.XDPath -replace '(?<=\\)[^\\]+(?=\.template\\)', "$Image"
+                                    $machine_profile_update_required = $true
+                                } else {
+                                    Write-Log -Message "[Citrix Machine Profile] Catalog is using a different machine profile to template. Not Updating Machine Profile" -Level Warn
+                                    Write-Log -Message "[Citrix Machine Profile] Machine Profile: $($machine_profile_name)" -Level Info
+                                    $machine_profile_update_required = $false
+                                }
+                            } else {
+                                $machine_profile_update_required = $false
+                            }
+                            # Start the update process
+                            $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $validate_catalog_exists.Id -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
+                        }                        
+                    }
+
+                    ## Now go monitor for success depending on task output above
+                    if ([string]::IsNullOrEmpty($update_catalog_image_task)) {
+                        Write-Log -Message "[Citrix Catalog Update] Failed to update Catalog: $($Catalog) with new image: $($updated_image)" -Level Warn
+                        $Global:TotalCatalogFailureCount ++
                         $Global:CurrentCatalogCount ++
-                        $Global:TotalCatalogSuccessCount ++
                     } else {
-                        Write-Log -Message "[Citrix Validation] Catalog is using $($catalog_current_image.Name). Will be processed." -Level Info
-                        $pattern = "(?<=\\)([^\\]+)(?=\.template)"
-                        $updated_image = $catalog_current_image.XDPath -replace $pattern,$Image
-
-                        Write-Log -Message "[Citrix Image] Current Image for Catalog: $($Catalog) is: $($catalog_current_image.XDPath)" -Level Info
-                        Write-Log -Message "[Citrix Image] New Image for Catalog: $($Catalog) will be: $($updated_image)" -Level Info
-                        # Start the update process
-                        
-                        $update_catalog_image_task = Invoke-CVADCatalogUpdateAPI -DDC $DDC -Catalog $Catalog -Image $updated_image -EncodedAdminCredential $EncodedAdminCredential
-
-                        ## Now go monitor for success depending on task output above
-                        if ([string]::IsNullOrEmpty($update_catalog_image_task)) {
+                        $cvad_job_completion = Invoke-CVADJobMonitorStatusAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential -JobID $update_catalog_image_task.id
+                        if ($cvad_job_completion -eq "Complete") {
+                            Write-Log -Message "[Citrix Catalog Update] Successfully updated Catalog: $($Catalog) with new image: $($updated_image)" -Level Info
+                            $Global:CurrentCatalogCount ++
+                            $Global:TotalCatalogSuccessCount ++
+                            $image_update_succeeded = $true
+                        } else {
                             Write-Log -Message "[Citrix Catalog Update] Failed to update Catalog: $($Catalog) with new image: $($updated_image)" -Level Warn
                             $Global:TotalCatalogFailureCount ++
                             $Global:CurrentCatalogCount ++
-                        } else {
-                            $cvad_job_completion = Invoke-CVADJobMonitorStatusAPI -DDC $DDC -EncodedAdminCredential $EncodedAdminCredential -JobID $update_catalog_image_task.id
-                            if ($cvad_job_completion -eq "Complete") {
-                                Write-Log -Message "[Citrix Catalog Update] Successfully updated Catalog: $($Catalog) with new image: $($updated_image)" -Level Info
-                                $Global:CurrentCatalogCount ++
-                                $Global:TotalCatalogSuccessCount ++
-                            } else {
-                                Write-Log -Message "[Citrix Catalog Update] Failed to update Catalog: $($Catalog) with new image: $($updated_image)" -Level Warn
-                                $Global:TotalCatalogFailureCount ++
-                                $Global:CurrentCatalogCount ++
-                            }
+                            $image_update_succeeded = $false
                         }
+                    }
+
+                    ## Now update the machine profile if required
+                    if ($machine_profile_update_required -eq $true -and $image_update_succeeded -eq $true) {
+                        $machine_profile_updated = Invoke-CVADMachineProfileUpdateAPI -DDC $DDC -Catalog $validate_catalog_exists.Id -MachineProfile $new_machine_profile -EncodedAdminCredential $EncodedAdminCredential
+                        if ($machine_profile_updated -eq $true) {
+                            Write-Log -Message "[Citrix Machine Profile Update] Successfully updated Machine Profile: $($new_machine_profile)" -Level Info
+                        } else {
+                            Write-Log -Message "[Citrix Machine Profile Update] Failed to update Machine Profile: $($new_machine_profile)" -Level Warn
+                            $Global:TotalCatalogSuccessCount --
+                            $Global:TotalCatalogFailureCount ++
+                        }
+                    } elseif ($machine_profile_update_required -eq $true) {
+                        Write-Log -Message "[Citrix Machine Profile Update] Skipping machine profile update because image update did not succeed" -Level Warn
                     }
                 }
             }
@@ -838,52 +955,94 @@ Function Invoke-CVADJobMonitorStatusAPI {
         #----------------------------------------------------------------------------------------------------------------------------
         # Get Job Status
         #----------------------------------------------------------------------------------------------------------------------------
+        # Common transient-failure handling: a single transient HTTP/socket blip from
+        # Get-CVADJobDetailsAPI must not cause us to lose track of a running job. We
+        # always re-poll using the original $JobID parameter (never $target_job_status.id)
+        # and treat a $null response as transient up to a small bounded count.
+        $max_consecutive_nulls = 5
+        $consecutive_nulls = 0
+        $target_job_status_result = $null
         try {
-            $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential -ErrorAction Stop
-
             if (-not $HasSubJobs) {
-                # This is a single job with no sub jobs
-                while ($target_job_status.Status -ne "Complete") {
+                while ($true) {
+                    $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+
+                    if ($null -eq $target_job_status) {
+                        $consecutive_nulls++
+                        if ($consecutive_nulls -ge $max_consecutive_nulls) {
+                            Write-Log -Message "Job $($JobID) status unreachable after $($max_consecutive_nulls) consecutive attempts. Marking as Failure." -Level Error
+                            $target_job_status_result = "Failure"
+                            break
+                        }
+                        Write-Log -Message "Job $($JobID) status query returned no data (attempt $($consecutive_nulls)/$($max_consecutive_nulls)). Retrying." -Level Warn
+                        Start-Sleep -Seconds 15
+                        continue
+                    }
+                    $consecutive_nulls = 0
+
+                    if ($target_job_status.Status -eq "Complete") {
+                        $target_job_status_result = "Complete"
+                        break
+                    }
                     if ($target_job_status.Status -eq "Failed") {
                         Write-Log -Message "Job Status is $($target_job_status.Status) with Error: $($target_job_status.ErrorString)" -Level Error
                         $target_job_status_result = "Failure"
-                        Break #Replace with Exit 1
+                        break
                     }
+
                     Write-Log -Message "Job Status is $($target_job_status.Status) and is $($target_job_status.OverallProgressPercent) percent complete" -Level Info
                     Start-Sleep 30
-    
-                    $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $target_job_status.id -EncodedAdminCredential $EncodedAdminCredential
                 }
-                $target_job_status_result = "Complete"
             }
             else {
-                # This job has subjobs
-                $completed_jobs = @() #open the array to capture completed jobs
-                while ($target_job_status.status -ne "Complete") {
+                # This job has subjobs.
+                $completed_jobs = @()
+                $stop_polling = $false
+                $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+
+                while (-not $stop_polling) {
+                    if ($null -eq $target_job_status) {
+                        $consecutive_nulls++
+                        if ($consecutive_nulls -ge $max_consecutive_nulls) {
+                            Write-Log -Message "Job $($JobID) status unreachable after $($max_consecutive_nulls) consecutive attempts. Marking as Failure." -Level Error
+                            $target_job_status_result = "Failure"
+                            break
+                        }
+                        Write-Log -Message "Job $($JobID) status query returned no data (attempt $($consecutive_nulls)/$($max_consecutive_nulls)). Retrying." -Level Warn
+                        Start-Sleep -Seconds 15
+                        $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+                        continue
+                    }
+                    $consecutive_nulls = 0
+
+                    if ($target_job_status.status -eq "Complete") {
+                        $target_job_status_result = "Complete"
+                        break
+                    }
+
                     foreach ($subjob in $target_job_status.SubJobs) {
+                        if ($subjob.Status -eq "Failed") {
+                            Write-Log -Message "Job $($subjob.parameters.value) is Failed" -Level Error
+                            $target_job_status_result = "Failure"
+                            $stop_polling = $true
+                            break
+                        }
                         if ($subjob.Status -ne "Complete") {
-                            if ($subjob.Status -eq "Failed") {
-                                Write-Log -Message "Job $($subjob.parameters.value) is Failed" -Level Warn
-                                $target_job_status_result = "Failure"
-                                Break #Replace with Exit 1
-                            }
                             Write-Log -Message "Job $($subjob.parameters.value) is $($subjob.Status)" -Level Info
                             Start-Sleep 10
                         }
-                        elseif ($subjob.Status -eq "Complete" -and $subjob.parameters.value -notin $completed_jobs) {
+                        elseif ($subjob.parameters.value -notin $completed_jobs) {
                             Write-Log -Message "Job $($subjob.parameters.value) is complete" -Level Info
                             $completed_jobs += $subjob.parameters.value
                         }
-            
-                        try {
-                            $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
-                        }
-                        catch {
-                            Write-Log -Message $_ -Level Error
+                        $target_job_status = Get-CVADJobDetailsAPI -DDC $DDC -JobID $JobID -EncodedAdminCredential $EncodedAdminCredential
+                        if ($null -eq $target_job_status) {
+                            # Bail out of the foreach so the outer while can apply the null-retry policy.
+                            break
                         }
                     }
                 }
-                $target_job_status_result = "Complete"
+                if ($null -eq $target_job_status_result) { $target_job_status_result = "Complete" }
             }
         }
         catch {
@@ -920,12 +1079,59 @@ function Get-CVADJobDetailsAPI {
         #----------------------------------------------------------------------------------------------------------------------------
         $Method = "Get"
         $RequestUri = "https://$DDC/cvad/manage/Jobs/$($JobID)"
-        #----------------------------------------------------------------------------------------------------------------------------
-        try {
-            $job = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
-        }
-        catch {
-            Write-Log -Message $_ -Level Error
+        # Bounded retry on transient HTTP/socket failures (e.g. WSANO_DATA, connection reset, 5xx, 429).
+        # Non-transient errors (4xx other than 429) are rethrown so callers can fail fast.
+        $maxAttempts = 5
+        $attempt = 0
+        $job = $null
+        while ($attempt -lt $maxAttempts) {
+            $attempt++
+            try {
+                $job = Invoke-RestMethod -Uri $RequestUri -Method $Method -Headers $Headers -UseBasicParsing -SkipCertificateCheck -ErrorAction Stop
+                break
+            }
+            catch {
+                $isTransient = $false
+                $statusCode = $null
+                try {
+                    if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                        $statusCode = [int]$_.Exception.Response.StatusCode
+                    }
+                } catch { }
+
+                # Walk the inner exception chain for socket/IO indicators (WSANO_DATA / 11004 lives here).
+                $ex = $_.Exception
+                while ($ex) {
+                    if ($ex -is [System.Net.Sockets.SocketException] -or $ex -is [System.IO.IOException]) {
+                        $isTransient = $true
+                        break
+                    }
+                    $ex = $ex.InnerException
+                }
+                if (-not $isTransient -and $_.Exception -is [System.Net.Http.HttpRequestException] -and $null -eq $_.Exception.Response) {
+                    $isTransient = $true
+                }
+                if (-not $isTransient -and $null -ne $statusCode) {
+                    if ($statusCode -eq 429 -or ($statusCode -ge 500 -and $statusCode -lt 600)) {
+                        $isTransient = $true
+                    }
+                }
+
+                if (-not $isTransient) {
+                    Write-Log -Message "[CVAD Jobs] Non-transient error fetching Job $($JobID): $_" -Level Error
+                    throw
+                }
+
+                if ($attempt -ge $maxAttempts) {
+                    Write-Log -Message "[CVAD Jobs] Transient error fetching Job $($JobID) after $($maxAttempts) attempts. Giving up. Last error: $($_.Exception.Message)" -Level Error
+                    $job = $null
+                    break
+                }
+
+                $delay = 5 * $attempt
+                Write-Log -Message "[CVAD Jobs] Transient error fetching Job $($JobID) (attempt $($attempt)/$($maxAttempts)): $($_.Exception.Message). Retrying in $($delay)s." -Level Warn
+                Start-Sleep -Seconds $delay
+            }
         }
     }
     end {
@@ -1837,7 +2043,7 @@ Function Get-PCDetails {
     process {
         Write-Log -Message "[Prism Central] Querying for Prism Central Details under the Prism Central Instance $($pc)" -Level Info
         try {
-            $pc_details = InvokePrismAPIv3 -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
+            $pc_details = Invoke-PrismAPIv4 -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCentralCredentials -ErrorAction Stop
         }
         catch {
             Write-Log -Message "[Prism Central] Could not connect to Prism Central Instance: $($pc)" -Level Warn
@@ -2359,6 +2565,7 @@ Function Get-PCStorageContainerList {
 # Variables
 # ============================================================================
 $RunDate = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -replace ":","-" -replace " ","-" # We want all snapshots across all clusters to have the same timestamp
+$SupportedHypervisorPlugTypes = @("AcropolisFactory", "AcropolisHypervisorPCFactory") # PE and PC Native Hypervisors
 
 #region Set variables from JSON to replace all parameters.
 #-------------------------------------------------------------
@@ -2419,7 +2626,7 @@ if ($ConfigPath){
     #------------------- Citrix Variables ---------------------------------------------------------------------------------#
     #----------------------------------------------------------------------------------------------------------------------#
     $IsCitrixDaaS                       = $master_config.CitrixParams.CitrixCloud.IsCitrixDaaS
-    if (-not $master_config.CitrixParams.MultieSite.ctx_SiteConfigJSON) { 
+    if (-not $master_config.CitrixParams.MultiSite.ctx_SiteConfigJSON) { 
         # Not a multi-site JSON based configuration, use  single site parameters
         if (-not $IsCitrixDaaS) { 
             # Not a DaaS environment, use the single site parameters
@@ -2441,7 +2648,7 @@ if ($ConfigPath){
         $ctx_AdminAddress               = $master_config.CitrixParams.SingleSite.ctx_AdminAddress
     } else { 
         # A multi-site JSON based configuration, use the ctx_SiteConfigJSON parameter
-        $ctx_SiteConfigJSON             = $master_config.CitrixParams.MultieSite.ctx_SiteConfigJSON
+        $ctx_SiteConfigJSON             = $master_config.CitrixParams.MultiSite.ctx_SiteConfigJSON
     }
     $DomainUser                         = $master_config.CitrixParams.DomainUser
     $DomainPassword                     = $master_config.CitrixParams.DomainPassword
@@ -2497,6 +2704,9 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     # If Citrix Processing. If not Citrix DaaS
     if (-not $IsCitrixDaaS -and (-not ($ctx_SiteConfigJSON))) {
         if ([string]::IsNullOrEmpty($ctx_AdminAddress)) { Write-Log -Message "[PARAM VALIDATION] DDC is required for Citrix CVAD" -Level Error; Exit 1 }
+    }
+    if ($IsCitrixDaaS -and $ctx_SiteConfigJSON) {
+        Write-Log -Message "[PARAM VALIDATION] Citrix DaaS and SiteConfigJSON are both specified. You cannot use ctx_SiteConfigJSON with Citrix DaaS" -Level Error; Exit 1
     }
     # If CitrixDaaS, Must have CustomerID, ClientID, ClientSecret, and Region
     if ($IsCitrixDaaS) {
@@ -2678,12 +2888,13 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
                     Write-Log -Message "[Citrix Validation] Catalog is of provisioning type $($validate_catalog_exists.ProvisioningType) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                     $Global:TotalCatalogFailureCount += 1
                 } else {
-                    if ($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName -eq "AcropolisFactory") {
+                    $HypervisorPluginType = $validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName
+                    if ($HypervisorPluginType -in $SupportedHypervisorPlugTypes) {
                         Write-Log -Message "[Citrix Validation] Successfully validated Catalog: $($Catalog) on Delivery Controller: $($DDC)." -Level Info
-                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName)" -Level Info
+                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($HypervisorPluginType)" -Level Info
                         $Global:TotalCatalogSuccessCount ++
                     } else {
-                        Write-Log -Message "[Citrix Validation] Catalog is not of type Acropolis and cannot be used on Delivery Controller: $($DDC)" -Level Warn
+                        Write-Log -Message "[Citrix Validation] Catalog is using a hypervisor plugin type that is not supported ($($HypervisorPluginType)) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                         $Global:TotalCatalogFailureCount += 1
                     } 
                 }
@@ -2720,12 +2931,13 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
                     Write-Log -Message "[Citrix Validation] Catalog is of provisioning type $($validate_catalog_exists.ProvisioningType) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                     $Global:TotalCatalogFailureCount += 1
                 } else {
-                    if ($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName -eq "AcropolisFactory") {
+                    $HypervisorPluginType = $validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName
+                    if ($HypervisorPluginType -in $SupportedHypervisorPlugTypes) {
                         Write-Log -Message "[Citrix Validation] Successfully validated Catalog: $($Catalog) on Delivery Controller: $($DDC)." -Level Info
-                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($validate_catalog_exists.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName)" -Level Info
+                        Write-Log -Message "[Citrix Validation] Provisioning Type: $($validate_catalog_exists.ProvisioningType) and Hypervisor Plugin Type $($HypervisorPluginType)" -Level Info
                         $Global:TotalCatalogSuccessCount ++
                     } else {
-                        Write-Log -Message "[Citrix Validation] Catalog is not of type Acropolis and cannot be used on Delivery Controller: $($DDC)" -Level Warn
+                        Write-Log -Message "[Citrix Validation] Catalog is using a hypervisor plugin type that is not supported ($($HypervisorPluginType)) and cannot be used on Delivery Controller: $($DDC)" -Level Warn
                         $Global:TotalCatalogFailureCount += 1
                     }                    
                 }
@@ -2735,6 +2947,25 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
     }
 
     Write-Log -Message "[Citrix Validation] Successfully validated $($TotalCatalogSuccessCount) Catalogs" -Level Info
+
+    # Now check to ensure that only one type of hypervisor plugin type is used - we can't handle multiple types
+    $HypervisorPluginTypes = $Catalogs | ForEach-Object { $_.ProvisioningScheme.ResourcePool.Hypervisor.PluginFactoryName }
+    $UniqueHypervisorPluginTypes = $HypervisorPluginTypes | Sort-Object -Unique
+    if ($UniqueHypervisorPluginTypes.Count -gt 1) {
+        Write-Log -Message "[Citrix Validation] Multiple hypervisor plugin types are used across the Catalogs: $($UniqueHypervisorPluginTypes). This is unsupported." -Level Warn
+        StopIteration
+        Exit 1
+    }
+
+    # Now set a citrix environment type for future processing based on the hypervisor type
+    if ($UniqueHypervisorPluginTypes -eq "AcropolisFactory") {
+        $citrix_integration_type = "PrismElement"
+    } else {
+        $citrix_integration_type = "PrismCentral"
+    }
+
+    Write-Log -Message "[Citrix Validation] Citrix Integration type used for this environment: $($citrix_integration_type)" -Level Info
+
     if ($TotalCatalogFailureCount -gt 0) {
         Write-Log -Message "[Citrix Validation] Failed to validate $($TotalCatalogFailureCount) Catalogs" -Level Warn
         StopIteration
@@ -2830,10 +3061,20 @@ if ([string]::IsNullOrEmpty($AdditionalPrismCentrals)) {
 #region Learn about the Source VM
 #-------------------------------------------------------------
 $source_vm = Get-PCVM -pc $SourcePC -vmName $BaseVM -PrismCentralCredentials $PrismCentralCredentials
+#region Add an array check for duplicate instance debugging
+if ($source_vm -is [Array]) {
+    Write-Log -Message "[VM] Found multiple Source VMs: $($source_vm.name) on pc $($SourcePC)" -Level Warn
+    Foreach ($vm in $source_vm) {
+        Write-Log -Message "[VM] VM: $($vm.name) with extId $($vm.extId) on cluster $($vm.cluster.ExtId) created at $($vm.createTime)" -Level warn
+    }
+    Write-Log -Message "[VM] Using the most recently created VM" -Level Info
+    $source_vm = $source_vm | Sort-Object createTime -descending | Select-Object -First 1
+}
+#endregion Add an array check for duplicate instance debugging
 if (-not [string]::IsNullOrEmpty($source_vm)) {
-    Write-Log -Message "[VM] Found Source VM: $($source_vm.name) on pc ($SourcePC)" -Level Info
+    Write-Log -Message "[VM] Found Source VM: $($source_vm.name) on pc $($SourcePC)" -Level Info
 } else {
-    Write-Log -Message "[VM] Could not find Source VM: $($BaseVM) on pc ($SourcePC)" -Level Warn
+    Write-Log -Message "[VM] Could not find Source VM: $($BaseVM) on pc $($SourcePC)" -Level Warn
     StopIteration
     Exit 1
 }
@@ -3849,19 +4090,6 @@ if ($OutputType -eq "PE-Snapshot") {
 }
 #endregion Process each PC
 
-Write-Log -Message "[Data] ---------------- Results Outputs ----------------" -Level Info
-Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_prism_centrals) Prism Centrals" -Level Info
-Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_prism_centrals) Prism Centrals" -Level Info
-if ($OutputType -eq "PE-Snapshot") {
-    Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_clusters) Clusters" -Level Info
-    Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_clusters) Clusters" -Level Info
-    Write-Log -Message "[Data] Successfully processed $($reporting_total_processed_clusters) Clusters without error" -Level Info
-    if ($reporting_total_failed_clusters -gt 0) {
-        Write-Log -Message "[Data] Failed to process $($reporting_total_failed_clusters) Clusters" -Level Warn
-    }
-}
-Write-Log -Message "[Data] Encountered $($total_error_count) errors. Please review log file $($LogPath) for failures" -Level Info
-
 #region Process Citrix Environment
 #-------------------------------------------------------------
 if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
@@ -3885,26 +4113,53 @@ if ($ctx_Catalogs -or $ctx_SiteConfigJSON) {
             $Catalog = $_.Catalog
             $DDC = $_.Controller
 
-            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $pe_snapshot_name -EncodedAdminCredential $EncodedAdminCredential
+            if ($citrix_integration_type -eq "PrismElement") {
+                $image_for_update = $pe_snapshot_name
+            } elseif ($citrix_integration_type -eq "PrismCentral") {
+                $image_for_update = $pc_template_name
+            }
+
+            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $image_for_update -EncodedAdminCredential $EncodedAdminCredential -CitrixIntegrationType $citrix_integration_type
         }
     }
     else {
         #NO JSON
         $Catalogs = $ctx_Catalogs # This was set in the validation phase, but resetting here for ease of reading
-        $DDC = $ctx_AdminAddress # This was set in the validation phase, but resetting here for ease of reading
         $CatalogCount = $Catalogs.Count
 
         Write-Log -Message "[Citrix Catalog] There are $($CatalogCount) Catalogs to Process" -Level Info
         foreach ($Catalog in $Catalogs) {
-            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $pe_snapshot_name -EncodedAdminCredential $EncodedAdminCredential
+            if ($citrix_integration_type -eq "PrismElement") {
+                $image_for_update = $pe_snapshot_name
+            } elseif ($citrix_integration_type -eq "PrismCentral") {
+                $image_for_update = $pc_template_name
+            }
+            
+            Invoke-ProcessCitrixCatalogUpdate -DDC $DDC -Catalog $Catalog -Image $image_for_update -EncodedAdminCredential $EncodedAdminCredential -CitrixIntegrationType $citrix_integration_type
         }
     }
     Write-Log -Message "[Citrix Catalog] Successfully processed $($TotalCatalogSuccessCount) Catalogs" -Level Info
     if ($TotalCatalogFailureCount -gt 0) {
-        Write-Log "[Citrix Catalog] Failed to processed $($TotalCatalogFailureCount) Catalogs" -Level Warn
+        Write-Log "[Citrix Catalog] Failed to process $($TotalCatalogFailureCount) Catalogs" -Level Warn
     }
 }
 #endregion Process Citrix Environment
+
+#region Results Outputs
+#------------------------------------------------------------
+Write-Log -Message "[Data] ---------------- Results Outputs ----------------" -Level Info
+Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_prism_centrals) Prism Centrals" -Level Info
+Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_prism_centrals) Prism Centrals" -Level Info
+if ($OutputType -eq "PE-Snapshot") {
+    Write-Log -Message "[Data] Processed a total of $($reporting_total_processed_clusters) Clusters" -Level Info
+    Write-Log -Message "[Data] Ignored a total of $($reporting_total_ignored_clusters) Clusters" -Level Info
+    Write-Log -Message "[Data] Successfully processed $($reporting_total_processed_clusters) Clusters without error" -Level Info
+    if ($reporting_total_failed_clusters -gt 0) {
+        Write-Log -Message "[Data] Failed to process $($reporting_total_failed_clusters) Clusters" -Level Warn
+    }
+}
+Write-Log -Message "[Data] Encountered $($total_error_count) errors. Please review log file $($LogPath) for failures" -Level Info
+#endregion Results Outputs
 
 #endregion Execute
 

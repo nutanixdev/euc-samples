@@ -153,7 +153,6 @@ DaaS Params:
 - The temp VM when restored will have no NIC. This is fine for MCS provisioning.
 - The script requires that all Prism Centrals have the same authentication account (if you need different accounts per PC, update the script logic)
 - The script required that all Prism Elements have the same authentication account (if you need different accounts per PE, update the script logic)
-- If you choose to use Citrix integration, this integration is currently limited to PE based plugins.
 
 ## Tests Completed
 
