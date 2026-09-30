@@ -131,6 +131,7 @@
     # 30.05.2023: Initial release
     # 21.08.2023: Updated loop logic in Prism API Status call to exit on failure rather than break
     # 21.08.2023: Fixed PS5 vs PS7 count outputs where $CompletionMessageofOOBReplication.count and $RemoteSites.count reports a $null in PS5
+    # 29.09.2026: Updated logic to discover Cluster IPs from CVMs rather than use defined remote IPs (due to API change)
     #--------------------------------------------------------------------------------------------------------#
 #>
 
@@ -1112,12 +1113,56 @@ if (!$RemoteSites) {
     Exit 1
 }
 
+#region Discover Cluster IPs
+#------------------------------------------------------------
+# Discover the ClusterIPs for each Remote Site
+#------------------------------------------------------------
 $RemoteSiteIPS = @() # Initialise the Remote Site IP Array
-# get a list of the IP addresses
-foreach ($_ in $remoteSites) {
-    $RemoteIP = $_.remote_ip_address_ports | Get-Member -MemberType NoteProperty | Select-object -ExpandProperty Name
-    $RemoteSiteIPS += $RemoteIP
+
+foreach ($RemoteSite in $RemoteSites) {
+    Write-Log -Message "[Remote Sites] Remote Site: $($RemoteSite.name) has the following CVMS: $($RemoteSite.remote_ip_address_ports.PSObject.Properties.Name). Learning Cluster IP" -Level Info
+    $cluster_ip_identified = $false
+    # loop through each CVM until we discover the ClusterIP
+    foreach ($CVM in $RemoteSite.remote_ip_address_ports.PSObject.Properties.Name) {
+        if ($cluster_ip_identified -eq $true) {
+            Break
+        } else {
+            # Discover the Cluster IP from the CVM if possible
+            try {
+                #----------------------------------------------------------------------------------------------------------------------------
+                # Set API call detail
+                #----------------------------------------------------------------------------------------------------------------------------
+                $Method = "GET"
+                $RequestUri = "https://$($CVM):9440/PrismGateway/services/rest/v2.0/cluster"
+                $Payload = $null
+                #----------------------------------------------------------------------------------------------------------------------------
+                $ClusterIP = (InvokePrismAPI -Method $Method -Url $RequestUri -Payload $Payload -Credential $PrismCredentials -ErrorAction Stop).cluster_external_address.ipv4
+                if ($null -ne $ClusterIP) {
+                    $cluster_ip_identified = $true
+                    Write-Log -Message "[Remote Sites] Identified Cluster IP: $($ClusterIP) for Remote Site: $($RemoteSite.name) from CVM: $($CVM)" -Level Info
+                    $RemoteSiteIPS += $ClusterIP
+                    Break
+                } else {
+                    Write-Log -Message "[Remote Sites] Failed to identify a Cluster IP for Remote Site: $($RemoteSite.name) from CVM: $($CVM)" -Level Warn
+                }
+            }
+            catch {
+                Write-Log -Message "[Remote Sites] Failed to identify a Cluster IP for Remote Site: $($RemoteSite.name) from CVM: $($CVM)" -Level Warn
+            }
+        }
+    }
+    # Report on failure and break out of the cluster discovery loop
+    if ($cluster_ip_identified -eq $false) {
+        Write-Log -Message "[Remote Sites] Failed to identify a ClusterIP for Remote Site: $($RemoteSite.name). Skipping this Remote Site" -Level Warn
+    }
 }
+#endregion Discover Cluster IPs
+
+# get a list of the IP addresses -JK removed on 29.9.2026, change in API resulted in logic change requirement.
+# foreach ($_ in $remoteSites) {
+#     $RemoteIP = $_.remote_ip_address_ports | Get-Member -MemberType NoteProperty | Select-object -ExpandProperty Name
+#     $RemoteSiteIPS += $RemoteIP
+# }
 
 $TotalRemoteClusterCount = $RemoteSiteIPS.Count
 Write-Log -Message "[Remote Sites] Remote Clusters to process: $($TotalRemoteClusterCount)" -Level Info
