@@ -127,6 +127,7 @@
     # This script is provided as-is to outline capability and methodology for achieving the defined goals.
     # James Kindon - Senior Solutions Architect, EUC - Nutanix
     # 23.05.2023: Initial release
+    # 29.09.2026: Updated logic to discover Cluster IPs from CVMs rather than use defined remote IPs (due to API change)
     #--------------------------------------------------------------------------------------------------------#
 #>
 
@@ -898,8 +899,61 @@ if (!$RemoteSites) {
     Exit 1
 }
 
-# get a list of the IP addresses
-$RemoteSiteIPS = ($remoteSites.remoteIpPorts).Keys
+#region Discover Cluster IPs
+#------------------------------------------------------------
+# Discover the ClusterIPs for each Remote Site
+#------------------------------------------------------------
+# Each Remote Site will have a unique name, and a list of CVMS (remoteIpPorts). We need to discover the clusterIP to handle restoration activities
+$RemoteSiteIPS = @()
+
+foreach ($RemoteSite in $RemoteSites) {
+    Write-Log -Message "[Remote Sites] Remote Site: $($RemoteSite.name) has the following CVMS: $($RemoteSite.remoteIpPorts.Keys). Learning Cluster IP" -Level Info
+    $cluster_ip_identified = $false
+    # loop through each CVM until we discover the ClusterIP
+    foreach ($CVM in $RemoteSite.remoteIpPorts.Keys) {
+        if ($cluster_ip_identified -eq $true) {
+            break
+        } else {
+            # Discover the ClusterIP from the CVM if possible
+            try {
+                Connect-NTNXCluster -Server $CVM -UserName $PrismCredentials.Username -Password $PrismCredentials.Password -AcceptInvalidSSLCerts -ErrorAction Stop | Out-null
+                $RemoteClusterIP = (Get-NTNXCluster -Server $CVM -ErrorAction Stop).clusterExternalIPAddress
+                If ($null -ne $RemoteClusterIP) {
+                    $cluster_ip_identified = $true
+                    Write-Log -Message "[Remote Sites] Identified Cluster IP: $($RemoteClusterIP) for Remote Site: $($RemoteSite.name) from CVM: $($CVM)" -Level Info
+                    Disconnect-NTNXCluster -Server $CVM
+                    $RemoteSiteIPS += $RemoteClusterIP
+                } else {
+                    Write-Log -Message "[Remote Sites] Failed to identify a ClusterIP for Remote Site: $($RemoteSite.name) from CVM: $($CVM)" -Level Warn
+                    Disconnect-NTNXCluster -Server $CVM
+                }
+            }
+            catch {
+                Write-Log -Message "[Remote Sites] Failed to connect to CVM: $($CVM): $_" -Level Warn
+            }
+        }
+    }
+    # Report on failure and break out of the cluster discovery loop
+    if ($cluster_ip_identified -eq $false) {
+        Write-Log -Message "[Remote Sites] Failed to identify a ClusterIP for Remote Site: $($RemoteSite.name). Skipping this Remote Site" -Level Warn
+    }
+}
+# Connect back to the source cluster
+try {
+    Write-Log -Message "[Source Cluster] Connecting to the source Cluster: $($SourceCluster)" -Level Info
+    Connect-NTNXCluster -Server $SourceCluster -UserName $PrismCredentials.Username -Password $PrismCredentials.Password -AcceptInvalidSSLCerts -ErrorAction Stop | Out-null
+    Write-Log -Message "[Source Cluster] Successfully connected to the source Cluser: $($SourceCluster)" -Level Info
+}
+catch {
+    Write-Log -Message "[Source Cluster] Could not connect to the source Cluster: $($SourceCluster) " -Level Warn
+    Write-Log -Message $_ -Level Warn
+    StopIteration
+    Exit 1
+}
+#endregion Discover Cluster IPs
+
+# get a list of the IP addresses - JK removed on 29.9.2026, change in API resulted in logic change requirement.
+#$RemoteSiteIPS = ($remoteSites.remoteIpPorts).Keys
 
 $TotalRemoteClusterCount = $RemoteSiteIPS.Count
 Write-Log -Message "[Remote Sites] Remote Clusters to process: $($TotalRemoteClusterCount)" -Level Info
