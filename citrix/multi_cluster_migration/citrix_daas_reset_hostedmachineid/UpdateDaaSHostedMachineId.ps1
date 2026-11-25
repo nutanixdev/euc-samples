@@ -296,13 +296,20 @@ function Get-CCSiteID {
         [Parameter(Mandatory = $true)]
         [string] $CustomerID
     )
-    $RequestUri = "https://$($CloudUrl)/cvadapis/me"
     $Headers = @{
         "Accept"            = "application/json";
         "Authorization"     = "CWSAuth Bearer=$AccessToken";
         "Citrix-CustomerId" = $CustomerID;
     }
-    $Response = Invoke-RestMethod -Uri $RequestUri -Method GET -Headers $Headers
+    $RequestUri = "https://$($CloudUrl)/cvad/manage/Me"
+    try {
+        $Response = Invoke-RestMethod -Uri $RequestUri -Method GET -Headers $Headers -ErrorAction Stop
+    }
+    catch {
+        Write-Log -Message "Failed to return Site ID from cvad/manage/Me. Trying cvadapis/me" -Level Warn
+        $RequestUri = "https://$($CloudUrl)/cvadapis/me"
+        $Response = Invoke-RestMethod -Uri $RequestUri -Method GET -Headers $Headers
+    }
     return $Response.Customers.Sites.Id
 }
 
