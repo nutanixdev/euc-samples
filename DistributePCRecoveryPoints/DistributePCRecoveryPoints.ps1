@@ -481,19 +481,26 @@ function Get-CVADAuthHeadersAPI {
             #--------------------------------------------
             # Get the DaaS Site ID
             #--------------------------------------------
-            $RequestUri = "https://$($CloudUrl)/cvadapis/me"
             $Headers = @{
                 "Accept"            = "application/json";
                 "Authorization"     = "CWSAuth Bearer=$($AccessToken.access_token)";
                 "Citrix-CustomerId" = "$CustomerID";
             }
 
+            $RequestUri = "https://$($CloudUrl)/cvad/manage/Me"
             try {
                 $Response = Invoke-RestMethod -Uri $RequestUri -Method GET -Headers $Headers -ErrorAction Stop
             }
             catch {
-                Write-Log -Message "Failed to return Site ID" -Level Error
-                Break
+                Write-Log -Message "Failed to return Site ID from cvad/manage/Me. Trying cvadapis/me" -Level Warn
+                $RequestUri = "https://$($CloudUrl)/cvadapis/me"
+                try {
+                    $Response = Invoke-RestMethod -Uri $RequestUri -Method GET -Headers $Headers -ErrorAction Stop
+                }
+                catch {
+                    Write-Log -Message "Failed to return Site ID. Exiting" -Level Error
+                    Break #Replace with Exit 1
+                }
             }
 
             $SiteID = $Response.Customers.Sites.Id
